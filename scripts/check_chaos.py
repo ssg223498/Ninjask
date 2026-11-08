@@ -234,7 +234,7 @@ def main() -> None:
     first: dict[str, list[int]] = {}
     matched = inputs = 0
     jobs = [(g, a.seed) for g in range(a.first, a.first + a.games)]
-    with multiprocessing.Pool(a.workers, _init, (False, a.mix)) as pool, open(a.out, "w") as out:
+    with multiprocessing.Pool(a.workers, _init, (False, a.mix)) as pool, open(a.out, "w", encoding="utf-8") as out:
         for g, n, kind, detail in pool.imap_unordered(run_game, jobs, chunksize=2):
             if kind is None:
                 matched += 1

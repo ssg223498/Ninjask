@@ -119,9 +119,10 @@ function traceRng(rec) {
 		const r = orig(from, to);
 		const frames = new Error().stack.split('\n').slice(2)
 			.map(l => l.trim().replace(/^at /, ''))
-			.filter(l => /pokemon-showdown\/dist\/(sim|data)\//.test(l) && !/prng\.js/.test(l))
+			// The checkout's dist/ in any directory, with / or \ (Windows) separators.
+			.filter(l => /[\\/]dist[\\/](sim|data)[\\/]/.test(l) && !/prng\.js/.test(l))
 			.slice(0, 5)
-			.map(l => l.replace(/\(.*?pokemon-showdown\/dist\//, '(').replace(/:\d+\)$/, ')'))
+			.map(l => l.replace(/\(.*?[\\/]dist[\\/]/, '(').replace(/\\/g, '/').replace(/:\d+\)$/, ')'))
 			.join(' < ');
 		let call;
 		if (from === undefined) call = `random() = ${r}`;

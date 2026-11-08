@@ -43,7 +43,7 @@ def test_support_is_honest():
     # reported as unsupported.
     regmc = "gen9championsvgc2026regmc"
     d = dex(regmc)
-    spec = json.loads((FORMAT_DIR / f"{regmc}.json").read_text())
+    spec = json.loads((FORMAT_DIR / f"{regmc}.json").read_text(encoding="utf-8"))
     unported = {"gulpmissile", "iceface", "shieldsdown"}
     assert [m["id"] for m in spec["moves"] if d.move_support(m["id"]).startswith("unsupported")] == []
     assert set(d.supported_items()) >= {i["id"] for i in spec["items"]}

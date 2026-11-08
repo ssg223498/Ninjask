@@ -30,7 +30,7 @@ def main() -> None:
     focus = frozenset(x.strip() for x in args.focus.split(",") if x.strip())
     report = verify(args.format, args.cases, args.n, args.seed, teams=args.teams, focus=focus, pool_file=args.pool)
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(json.dumps(report, indent=1))
+    args.out.write_text(json.dumps(report, indent=1), encoding="utf-8")
     print(f"{report['cases']} cases, {report['comparisons']} comparisons, "
           f"{len(report['failures'])} failures, {len(report['errors'])} errors")
     kinds = Counter(f["feature"].split(".")[-1] for f in report["failures"])

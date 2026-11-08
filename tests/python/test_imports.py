@@ -19,7 +19,7 @@ ALLOWED = {"ninjask", "numpy", "scipy", "pytest"} | set(sys.stdlib_module_names)
 
 def _imports(path: Path) -> list[str]:
     names: list[str] = []
-    for node in ast.walk(ast.parse(path.read_text())):
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
         if isinstance(node, ast.Import):
             names += [a.name for a in node.names]
         elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
@@ -46,5 +46,5 @@ def test_imports_only_declared_dependencies() -> None:
 
 def test_does_not_read_data_directory() -> None:
     quoted = [q + "da" + "ta/" for q in "\"'"]  # built so this file doesn't match itself
-    bad = [str(p.relative_to(ROOT)) for p in _sources() if any(q in p.read_text() for q in quoted)]
+    bad = [str(p.relative_to(ROOT)) for p in _sources() if any(q in p.read_text(encoding="utf-8") for q in quoted)]
     assert not bad, "\n".join(bad)

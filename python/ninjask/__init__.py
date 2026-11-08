@@ -310,7 +310,7 @@ def verification_teams(pool: Path | str | None = None) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []
     for f in files:
-        for t in f.read_text().splitlines():
+        for t in f.read_text(encoding="utf-8").splitlines():
             if t and t not in seen:
                 seen.add(t)
                 out.append(t)

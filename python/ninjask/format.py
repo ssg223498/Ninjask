@@ -120,9 +120,10 @@ def export_path(format_id: str, refresh: bool = False) -> Path:
         check=True,
         capture_output=True,
         text=True,
+        encoding="utf-8",
         env=node_env(),
     ).stdout
-    path.write_text(data)
+    path.write_text(data, encoding="utf-8")
     return path
 
 
@@ -139,4 +140,4 @@ def load(format_id: str, refresh: bool = False) -> FormatSpec:
 
 @lru_cache(maxsize=8)
 def _parse(path: str, mtime_ns: int) -> FormatSpec:
-    return FormatSpec(json.loads(Path(path).read_text()))
+    return FormatSpec(json.loads(Path(path).read_text(encoding="utf-8")))

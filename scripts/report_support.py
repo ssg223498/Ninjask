@@ -39,7 +39,7 @@ def main() -> None:
     p.add_argument("--pool", type=Path, help="team pool to read (default: <data>/teams/<format>-pastes.txt)")
     args = p.parse_args()
     pool_path = args.pool or TEAMS_DIR / f"{args.format}-pastes.txt"
-    teams = [t for t in pool_path.read_text().splitlines() if t.strip()]
+    teams = [t for t in pool_path.read_text(encoding="utf-8").splitlines() if t.strip()]
     d = dex(args.engine_format)
     blockers: list[set[str]] = []
     for t in teams:
@@ -85,11 +85,11 @@ def main() -> None:
     suffix = "" if args.pool is None else "-" + pool_path.stem.removeprefix(f"{args.format}-")
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     dest = DATA_DIR / f"support-{args.format}{suffix}.json"
-    dest.write_text(json.dumps(out, indent=1))
+    dest.write_text(json.dumps(out, indent=1), encoding="utf-8")
     name = "supported-pool.txt" if args.pool is None else f"supported-{pool_path.stem}.txt"
     TEAMS_DIR.mkdir(parents=True, exist_ok=True)
     pool = TEAMS_DIR / name
-    pool.write_text("".join(t + "\n" for t, b in zip(teams, blockers) if not b))
+    pool.write_text("".join(t + "\n" for t, b in zip(teams, blockers) if not b), encoding="utf-8")
     print(f"{supported}/{len(teams)} pool teams fully supported")
     print("most common blockers:", ", ".join(f"{e} {n}" for e, n in counts.most_common(25)))
     print("greedy port order (teams supported after each):")

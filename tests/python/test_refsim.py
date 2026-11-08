@@ -9,7 +9,7 @@ from ninjask.refsim import Battle, RefSim, seed_from_int
 from ninjask.play import play_game
 
 FORMAT = "gen9championsvgc2026regmc"
-TEAMS = FIXTURE_POOL.read_text().splitlines()
+TEAMS = FIXTURE_POOL.read_text(encoding="utf-8").splitlines()
 
 pytestmark = pytest.mark.skipif(
     not (SHOWDOWN_DIR / "dist").exists(),

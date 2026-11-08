@@ -41,6 +41,7 @@ class RefSim:
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             text=True,
+            encoding="utf-8",  # Node speaks UTF-8, whatever the locale (Windows: cp932, cp1252)
             bufsize=1,
             env=node_env(),
         )

@@ -12,7 +12,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 FORMAT = "gen9championsvgc2026regmc"
-TEAMS = FIXTURE_POOL.read_text().splitlines()
+TEAMS = FIXTURE_POOL.read_text(encoding="utf-8").splitlines()
 
 
 @pytest.fixture(scope="module")

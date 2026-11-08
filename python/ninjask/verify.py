@@ -362,7 +362,7 @@ SHEETS_POOL = TEAMS_DIR / "gen9championsvgc2026regmc-sheets-placeholder.txt"
 def supported_pool_teams(format_id: str, pool: Path = SHEETS_POOL) -> list[str]:
     """The teams of a pool file (one packed team per line) the engine fully supports."""
     d = engine_dex(format_id)
-    return [t for t in pool.read_text().splitlines() if t.strip() and not d.team_problems(t)]
+    return [t for t in pool.read_text(encoding="utf-8").splitlines() if t.strip() and not d.team_problems(t)]
 
 
 def verify(

@@ -50,7 +50,7 @@ def test_deterministic_turn(battle):
 
 @pytest.mark.parametrize("mode", [EnumerationMode.Precise, EnumerationMode.DamageEndpoints])
 def test_accuracy_and_crit_probabilities(mode, tmp_path):
-    spec = json.loads((Path(__file__).parents[1] / "fixtures" / "enumeration.json").read_text())
+    spec = json.loads((Path(__file__).parents[1] / "fixtures" / "enumeration.json").read_text(encoding="utf-8"))
     spec["moves"][0]["accuracy"] = 75
     fixture = tmp_path / "accuracy.json"
     fixture.write_text(json.dumps(spec))
