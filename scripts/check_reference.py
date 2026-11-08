@@ -13,6 +13,13 @@ RNG states and the fields of the projections that differ.
     uv run python scripts/check_reference.py --games 1 --first 7 --verbose
     uv run python scripts/check_reference.py --games 500 --workers 4 --require perishsong,haze
     uv run python scripts/check_reference.py --games 2000 --workers 4 --synthetic
+    uv run python scripts/check_reference.py --format gen9championsbssregmc --pool teams.txt --games 1000
+
+`--format` (or `$NINJASK_FORMAT`) picks the format; the default is Reg M-C
+doubles. `--requests` (or `$NINJASK_CHECK_REQUESTS=1`) also compares every
+request Showdown sends with the engine's (without `rqid`, which Showdown's
+server adds, not its simulator). Worker processes read both from the
+environment.
 """
 
 from __future__ import annotations
@@ -22,6 +29,7 @@ import difflib
 import json
 import multiprocessing
 import multiprocessing.util
+import os
 import random
 import re
 import sys
@@ -36,8 +44,9 @@ from ninjask import load as load_format
 from ninjask import focus_teams, supported_test_team, verification_teams
 from ninjask.refsim import Battle, RefSim, seed_from_int
 
-FORMAT = "gen9championsvgc2026regmc"
+FORMAT = os.environ.get("NINJASK_FORMAT") or "gen9championsvgc2026regmc"
 GAME_TYPE = load_format(FORMAT).game_type
+REQUESTS = os.environ.get("NINJASK_CHECK_REQUESTS") == "1"
 TURN_LIMIT = 150
 
 # Lines that carry no battle state: timestamps, format banners, interface, hints.
@@ -141,6 +150,19 @@ def play(sim: RefSim, d, seed: str, t1: str, t2: str, rng: random.Random, verbos
                 else:
                     kind = f"{site(sd_draws[first])}  vs  {site(eng_draws[first])}"
                 raise Divergence(f"{where}\n{diff}\nrng showdown {sd_seed}\nrng engine   {eng_seed}\n{draws}", kind)
+            if REQUESTS:
+                for s in ("p1", "p2"):
+                    want = o.requests.get(s)
+                    if want is None:
+                        continue
+                    text = eng.request(s)
+                    got = json.loads(text) if text else None
+                    if got is not None:
+                        got.pop("rqid", None)
+                    if got != want:
+                        paths = state_diff(want, got) if isinstance(got, dict) else [f": showdown {json.dumps(want)[:200]}, engine {got}"]
+                        kind = "request: " + re.sub(r"\[\d+\]", "[]", paths[0].split(":")[0]) if paths else "request"
+                        raise Divergence(f"{where}\n{s} requests differ:\n  " + "\n  ".join(paths[:20]), kind)
             fields = state_diff(sd_state, eng_state)
             if fields:
                 kind = "state: " + re.sub(r"\[\d+\]", "[]", fields[0].split(":")[0])
@@ -153,7 +175,7 @@ def play(sim: RefSim, d, seed: str, t1: str, t2: str, rng: random.Random, verbos
                 req = requests.get(side)
                 if not req or req.get("wait"):
                     continue
-                choices = team_preview_choices(req) if req.get("teamPreview") else joint_choices(req, include_ally_targets=True, game_type=GAME_TYPE)
+                choices = team_preview_choices(req, GAME_TYPE) if req.get("teamPreview") else joint_choices(req, include_ally_targets=True, game_type=GAME_TYPE)
                 choice = rng.choice(choices)
                 obs = sd.choose(side, choice, omniscient=True)
                 # Something hidden from the player (Imprison's 'hidden' disable, a
@@ -232,8 +254,18 @@ def main() -> None:
     p.add_argument("--require", default="", help="comma-separated move, item or ability ids player 1's team must use one of")
     p.add_argument("--synthetic", action="store_true", help="random legal teams over every supported entity instead of the pools")
     p.add_argument("--pool", type=Path, help="team pool: a file or a directory of supported-*.txt (default: ninjask.default_pool())")
+    p.add_argument("--format", help="format id (default: $NINJASK_FORMAT, else gen9championsvgc2026regmc)")
+    p.add_argument("--requests", action="store_true", help="also compare every request (default: $NINJASK_CHECK_REQUESTS)")
     p.add_argument("--verbose", action="store_true")
     args = p.parse_args()
+    # Workers import this module afresh (spawn): hand the options over in the environment.
+    global FORMAT, GAME_TYPE, REQUESTS
+    if args.requests:
+        os.environ["NINJASK_CHECK_REQUESTS"] = "1"
+        REQUESTS = True
+    if args.format:
+        os.environ["NINJASK_FORMAT"] = FORMAT = args.format
+        GAME_TYPE = load_format(FORMAT).game_type
     require = tuple(x.strip() for x in args.require.split(",") if x.strip())
     jobs = [(g, args.seed) for g in range(args.first, args.first + args.games)]
     if args.workers > 1:
