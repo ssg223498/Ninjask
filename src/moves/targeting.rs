@@ -30,18 +30,22 @@ impl Battle {
         }
     }
 
-    /// Showdown `getRandomTarget` (doubles): the user for moves on itself, its
+    /// Showdown `getRandomTarget`: the user for moves on itself, its
     /// side or the field; a random adjacent ally for ally moves; otherwise a
     /// random foe still standing (one draw, even with a single foe), or the
-    /// foe in slot a when none stands.
+    /// foe in slot a when none stands. In singles there is no draw: no ally
+    /// for ally moves, else the foe's only slot, standing or not.
     #[track_caller]
     pub(crate) fn get_random_target(&mut self, r: MonRef, target: Target) -> Option<MonRef> {
+        let singles = !self.dex.format.doubles;
         match target {
             Target::SelfTarget
             | Target::All
             | Target::AllySide
             | Target::AllyTeam
             | Target::AdjacentAllyOrSelf => Some(r),
+            Target::AdjacentAlly if singles => None,
+            _ if singles => self.active(1 - r.0, 0),
             Target::AdjacentAlly => {
                 let allies = if self.mon(r).fainted {
                     ActiveList::new()

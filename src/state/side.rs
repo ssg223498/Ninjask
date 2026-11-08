@@ -168,6 +168,10 @@ pub enum Reveal {
     Disabled,
     /// A hidden trap (Shadow Tag).
     Trapped,
+    /// The move (its index) a refused choice picked: the updated request
+    /// shows it disabled, with an empty `disabledSource`. In singles it is
+    /// the only one shown so (`updateDisabledRequest` skips singles).
+    Move(usize),
 }
 
 impl Side {

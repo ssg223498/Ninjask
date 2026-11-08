@@ -25,17 +25,20 @@ impl Battle {
     /// `getMoves(lockedMove, isLastActive)`). Imprison disables moves
     /// 'hidden', so as not to reveal the foe's moves: the request for the
     /// side's last active Pokémon shows them usable, while the others'
-    /// show them disabled.
+    /// show them disabled. A fainted Pokémon's moves are as the last
+    /// `DisableMove` pass left them, which skips its foes' Imprison
+    /// (`store_disabled_moves`).
     pub fn move_shown_disabled(&self, r: MonRef, idx: usize) -> bool {
         self.move_disabled_openly(r, idx)
-            || (self.move_imprisoned(r, idx) && !self.is_last_active(r))
+            || (self.move_imprisoned(r, idx) && !self.mon(r).fainted && !self.is_last_active(r))
     }
 
-    /// Showdown `isLastActive`: active, with no unfainted Pokémon in a later
-    /// position on its side.
+    /// Showdown `isLastActive`: active (`isActive`, which fainting clears),
+    /// with no unfainted Pokémon in a later position on its side.
     pub fn is_last_active(&self, (s, slot): MonRef) -> bool {
         let side = &self.sides[s];
         side.mons[slot].is_active
+            && !side.mons[slot].fainted
             && (slot + 1..side.n_active).all(|i| side.mons.get(i).is_none_or(|m| m.fainted))
     }
 

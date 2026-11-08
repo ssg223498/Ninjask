@@ -925,10 +925,11 @@ impl Battle {
                 true
             }
             MoveKind::AllySwitch => {
-                // onHit: swap with the ally, or fail without counting as a failure.
+                // onHit: swap with the ally, or fail without counting as a
+                // failure; always in singles (no ally to swap with).
                 let new = if r.1 == 0 { 1 } else { 0 };
                 match self.active(r.0, new) {
-                    Some(a) if !self.mon(a).fainted => {
+                    Some(a) if self.sides[r.0].n_active > 1 && !self.mon(a).fainted => {
                         self.swap_position(r, new, "|[from] move: Ally Switch")
                     }
                     _ => {

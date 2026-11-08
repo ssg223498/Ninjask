@@ -237,6 +237,10 @@ pub struct FormatInfo {
     pub level: Option<u8>,
     pub stat_point_limit: Option<u16>,
     pub champions: bool,
+    /// The Cancel Mod rule (in Flat Rules): a player may change a choice
+    /// until the foe has chosen, so a request says `noCancel` only when it
+    /// is the only one (Showdown `getRequests`).
+    pub cancel_mod: bool,
 }
 
 /// FxHash (as in rustc) for the dex's lookups by id, which run during
@@ -384,6 +388,9 @@ impl Dex {
             level: f["adjustLevel"].as_u64().map(|n| n as u8),
             stat_point_limit: f["evLimit"].as_u64().map(|n| n as u16),
             champions: s(f, "mod").starts_with("champions"),
+            cancel_mod: f["rules"]
+                .as_array()
+                .is_some_and(|rules| rules.iter().any(|r| r["rule"] == "cancelmod")),
         };
 
         // Types: every key of the type chart is a type; inner keys that are

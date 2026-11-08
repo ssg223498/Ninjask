@@ -7,7 +7,7 @@ name: CI
 #      cargo test --release, after the format export, which the tests that
 #      play battles read (they skip without it);
 #   2. the behaviour fingerprint on the fixture teams (2000 games), which
-#      must print fb8b1d107db9f213 (README, "Run the checks");
+#      must print 468d11e0d5f4cf86 (README, "Run the checks");
 #   3. exact agreement with pinned Showdown on 200 synthetic games and 200
 #      games of the VGCPastes pool (pools/);
 #   4. pytest.
@@ -76,7 +76,7 @@ jobs:
       - name: Fingerprint (fixture teams, 2000 games)
         run: |
           cargo run --release --example fingerprint -- data/derived/format/gen9championsvgc2026regmc.json tests/fixtures/regmc_teams.txt 2000 | tee fingerprint.txt
-          grep -qx "fingerprint fb8b1d107db9f213" fingerprint.txt
+          grep -qx "fingerprint 468d11e0d5f4cf86" fingerprint.txt
 
       - name: Exact agreement with Showdown (200 synthetic games)
         run: .venv/bin/python scripts/check_reference.py --synthetic --games 200 --workers 4

@@ -31,5 +31,5 @@ class RandomPolicy:
 
     def choose(self, request: dict, log: list[str]) -> str:
         if request.get("teamPreview"):
-            return self.rng.choice(team_preview_choices(request))
+            return self.rng.choice(team_preview_choices(request, self.game_type))
         return self.rng.choice(joint_choices(request, game_type=self.game_type))

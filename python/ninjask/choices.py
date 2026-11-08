@@ -161,13 +161,17 @@ def joint_choices(
     return out
 
 
-def team_preview_choices(request: dict) -> list[str]:
-    """Every ordered pick of the brought Pokémon; the first two lead."""
+def team_preview_choices(request: dict, game_type: str | None = None) -> list[str]:
+    """Every ordered pick of the brought Pokémon; the first two lead (the
+    first one in singles, ``game_type="singles"``), the rest in team order."""
+    if game_type not in (None, "doubles", "singles"):
+        raise ValueError(f"unknown game type {game_type!r}")
     size = len(request["side"]["pokemon"])
     bring = request.get("maxChosenTeamSize") or size
+    n_leads = 1 if game_type == "singles" else 2
     out = []
     for picked in itertools.combinations(range(1, size + 1), bring):
-        for leads in itertools.combinations(picked, min(2, bring)):
+        for leads in itertools.combinations(picked, min(n_leads, bring)):
             rest = [p for p in picked if p not in leads]
             out.append("team " + "".join(str(p) for p in (*leads, *rest)))
     return out

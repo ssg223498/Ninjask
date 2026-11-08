@@ -53,19 +53,34 @@ impl Battle {
             let part = parts.get(slot).copied().unwrap_or("");
             if let Err(e) = self.parse_slot_choice(s, slot, part) {
                 if e.starts_with(UNAVAILABLE) {
-                    let what = if e.contains("trapped") {
-                        Reveal::Trapped
+                    let mut what: ArrayVec<Reveal, 2> = ArrayVec::new();
+                    if e.contains("trapped") {
+                        what.push(Reveal::Trapped);
                     } else {
-                        Reveal::Disabled
-                    };
+                        // updateDisabledRequest shows every disabled move,
+                        // except in singles; the chosen one is marked either way.
+                        if self.dex.format.doubles {
+                            what.push(Reveal::Disabled);
+                        }
+                        let r = (s, slot);
+                        if let Some(i) = part
+                            .split_whitespace()
+                            .nth(1)
+                            .and_then(|w| self.move_index(r, w))
+                        {
+                            what.push(Reveal::Move(i));
+                        }
+                    }
                     let rqid = self.rqid;
                     let side = &mut self.sides[s];
                     if side.reveals_rqid != rqid {
                         side.reveals.clear();
                         side.reveals_rqid = rqid;
                     }
-                    if !side.reveals.contains(&(slot, what)) {
-                        side.reveals.push((slot, what));
+                    for w in what {
+                        if !side.reveals.contains(&(slot, w)) {
+                            side.reveals.push((slot, w));
+                        }
                     }
                 }
                 break;
@@ -77,6 +92,29 @@ impl Battle {
     fn revealed(&self, s: usize, slot: usize, what: Reveal) -> bool {
         let side = &self.sides[s];
         side.reveals_rqid == self.rqid && side.reveals.contains(&(slot, what))
+    }
+
+    /// Whether a refused choice updated the side's current request
+    /// (`emitRequest(..., true)` sets `update`), and for which slot.
+    fn request_updated(&self, s: usize, slot: Option<usize>) -> bool {
+        let side = &self.sides[s];
+        side.reveals_rqid == self.rqid
+            && side
+                .reveals
+                .iter()
+                .any(|&(sl, _)| slot.is_none_or(|x| x == sl))
+    }
+
+    /// The move a choice's word names: its 1-based number or its name.
+    fn move_index(&self, r: MonRef, w: &str) -> Option<usize> {
+        let m = self.mon(r);
+        match w.parse::<usize>() {
+            Ok(k) => (k >= 1 && k <= m.moves.len()).then(|| k - 1),
+            Err(_) => {
+                let id = to_id(w);
+                m.moves.iter().position(|ms| self.dex.mv(ms.id).id == id)
+            }
+        }
     }
 
     pub fn side_needs_choice(&self, s: usize) -> bool {
@@ -147,6 +185,18 @@ impl Battle {
         let side = &self.sides[s];
         let n = side.n_active;
         let parts: Vec<&str> = input.split(',').map(|p| p.trim()).collect();
+        // Side.choose: more choices than active slots (two in singles).
+        if parts.len() > n {
+            return Err(format!(
+                "Can't make choices: You sent choices for {} Pokémon, but this is a {} game!",
+                parts.len(),
+                if self.dex.format.doubles {
+                    "doubles"
+                } else {
+                    "singles"
+                }
+            ));
+        }
         let mut out = Vec::new();
         let mut switching: Vec<usize> = Vec::new();
         let mut mega = false;
@@ -376,7 +426,11 @@ impl Battle {
                 };
                 if auto {
                     target = 0;
-                } else if self.sides[s].n_active > 1 && tt.needs_choice() {
+                } else if tt.needs_choice() && (self.sides[s].n_active > 1 || target != 0) {
+                    // Side.chooseMove: a target is required with two or more
+                    // active; in singles it may be left out, and one given
+                    // must be valid (the foe's slot, or the user's own for
+                    // adjacentAllyOrSelf).
                     if !self.valid_target_loc(s, slot, target, tt) {
                         if target == 0 {
                             return Err(format!("Can't move: {name} needs a target"));
@@ -397,9 +451,14 @@ impl Battle {
                 };
                 if !self.move_usable(mon_ref, idx) {
                     // "[Unavailable choice]" when the request showed the move
-                    // usable (hidden by Imprison), "[Invalid choice]" otherwise.
-                    let hidden = !self.move_shown_disabled(mon_ref, idx)
-                        && !self.revealed(s, slot, Reveal::Disabled);
+                    // usable (hidden by Imprison; in singles until the next
+                    // request, as updateDisabledRequest leaves maybeDisabled),
+                    // and the first time the move is picked at all: chooseMove's
+                    // update gives it an empty disabledSource, so the request
+                    // changed. "[Invalid choice]" otherwise.
+                    let hidden = (!self.move_shown_disabled(mon_ref, idx)
+                        && !self.revealed(s, slot, Reveal::Disabled))
+                        || !self.revealed(s, slot, Reveal::Move(idx));
                     let prefix = if hidden { UNAVAILABLE } else { "" };
                     return Err(format!(
                         "{prefix}Can't move: {}'s {name} is disabled",
@@ -443,7 +502,7 @@ impl Battle {
         !self.move_disabled(r, idx)
     }
 
-    /// Showdown `validTargetLoc` for doubles.
+    /// Showdown `validTargetLoc`, for a chosen (nonzero) target location.
     #[inline(always)]
     pub(super) fn valid_target_loc(&self, s: usize, slot: usize, loc: i8, target: Target) -> bool {
         let n = self.sides[s].n_active as i8;
@@ -480,6 +539,34 @@ impl Battle {
 
     /// The request a side should answer now, in Showdown's JSON shape.
     pub fn request_json(&self, s: usize) -> Option<Value> {
+        let mut req = self.request_json_inner(s)?;
+        // getRequests: `noCancel` unless Cancel Mod lets the player change
+        // the choice, which it does only while the foe has a request too.
+        if req.get("wait").is_none() && (!self.dex.format.cancel_mod || !self.side_requested(1 - s))
+        {
+            req["noCancel"] = json!(true);
+        }
+        if req.get("active").is_some() && self.request_updated(s, None) {
+            req["update"] = json!(true);
+        }
+        Some(req)
+    }
+
+    /// Whether Showdown's `getRequests` made side `s` a request (not a
+    /// wait) in the current request state: at team preview and for moves
+    /// every side with Pokémon left, for switches a side with a slot to fill.
+    fn side_requested(&self, s: usize) -> bool {
+        match self.request {
+            RequestState::Ended => false,
+            RequestState::TeamPreview => true,
+            RequestState::Move => self.sides[s].pokemon_left > 0,
+            RequestState::Switch => {
+                self.sides[s].pokemon_left > 0 && self.force_switch[s].iter().any(|&f| f)
+            }
+        }
+    }
+
+    fn request_json_inner(&self, s: usize) -> Option<Value> {
         let side_data = self.side_request_data(s);
         match self.request {
             RequestState::Ended => None,
@@ -548,6 +635,13 @@ impl Battle {
                             }
                         }
                     }
+                    // The refused move itself (chooseMove's update).
+                    for (i, mv) in moves.iter_mut().enumerate() {
+                        if self.revealed(s, slot, Reveal::Move(i)) {
+                            mv["disabled"] = json!(true);
+                            mv["disabledSource"] = json!("");
+                        }
+                    }
                     // getMoveRequestData: with no move shown usable, Struggle is the only one.
                     if (0..m.moves.len()).all(|i| self.move_shown_disabled(r, i)) {
                         moves = vec![
@@ -563,12 +657,16 @@ impl Battle {
                         .foes_of(r)
                         .into_iter()
                         .any(|f| self.mon(f).vol.imprison);
+                    // A refusal clears maybeLocked, and maybeDisabled too
+                    // except in singles (updateDisabledRequest).
                     if imprisoned_by_foe
                         && self.is_last_active(r)
                         && !self.revealed(s, slot, Reveal::Disabled)
                     {
                         entry["maybeDisabled"] = json!(true);
-                        entry["maybeLocked"] = json!(true);
+                        if !self.request_updated(s, Some(slot)) {
+                            entry["maybeLocked"] = json!(true);
+                        }
                     }
                     let can_switch = (self.sides[s].n_active..self.sides[s].mons.len())
                         .any(|i| !self.sides[s].mons[i].fainted);
@@ -610,7 +708,10 @@ impl Battle {
                     "ident": format!("{}: {}", side.id(), m.name),
                     "details": self.details(s, i),
                     "condition": secret_health(m.hp, m.maxhp, m.status.id()),
-                    "active": m.is_active,
+                    // getSwitchRequestData: `position < side.active.length`, so the
+                    // Pokémon in an active slot is "active" at team preview and
+                    // after fainting too.
+                    "active": i < side.n_active,
                     "stats": stats,
                     "moves": m.moves.iter().map(|ms| self.dex.mv(ms.id).id.clone()).collect::<Vec<_>>(),
                     "baseAbility": self.dex.ability(m.base_ability).id,
@@ -725,7 +826,8 @@ impl Battle {
             if PLAYER {
                 !player_struggle
                     && !(self.move_shown_disabled(r, i)
-                        || (revealed_disabled && m.moves[i].disabled))
+                        || (revealed_disabled && m.moves[i].disabled)
+                        || self.revealed(s, slot, Reveal::Move(i)))
             } else {
                 !(self.move_disabled_openly(r, i) || (imprison && self.move_imprisoned(r, i)))
             }
@@ -854,7 +956,7 @@ impl Battle {
 
     /// Every team-preview pick a side can make, as team positions (0-based)
     /// in the order they are sent: each choice of the brought Pokémon, and
-    /// within it each pair of leads, the rest in team order
+    /// within it each pair of leads (each lead in singles), the rest in team order
     /// (`team_preview_choices` in `python/ninjask/choices.py`). Empty outside
     /// team preview or once the side has picked.
     pub fn team_preview_orders(&self, s: usize) -> Vec<Vec<usize>> {
@@ -871,7 +973,8 @@ impl Battle {
         }
         let n = self.sides[s].mons.len();
         let bring = self.dex.format.picked_team_size.unwrap_or(n).min(n);
-        let lead = bring.min(2);
+        // The Pokémon sent out first: two in doubles, one in singles.
+        let lead = bring.min(self.sides[s].n_active);
         // Teams have at most six Pokémon (TEAM_MAX).
         let mut picked = [0usize; TEAM_MAX];
         let mut order = [0usize; TEAM_MAX];
