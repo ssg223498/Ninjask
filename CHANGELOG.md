@@ -2,6 +2,61 @@
 
 ## Unreleased
 
+Singles: Champions BSS Reg M-C (`gen9championsbssregmc`, bring 6 pick 3)
+plays like Showdown on the `singles-bss` branch, checked on 1,000 of 1,000
+reference games with every request compared (`check_reference.py --format
+gen9championsbssregmc --requests`). Doubles games keep the same logs and
+random numbers (the fingerprint's `logs` and `draws` hashes are
+unchanged); their requests change where they now match Showdown's
+(`active`, `noCancel`, the updates after a refused choice), so the
+fingerprint moved from `fb8b1d107db9f213` to `468d11e0d5f4cf86`. With
+`--requests`, doubles match on 1,000 of 1,000 synthetic games and 1,000 of
+1,000 games of the VGCPastes pool.
+
+### Added
+
+- `scripts/check_reference.py --format <id>` (or `$NINJASK_FORMAT`) checks any
+  exported format, and `--requests` (or `$NINJASK_CHECK_REQUESTS=1`) also
+  compares every request Showdown sends with the engine's (without `rqid`,
+  which Showdown's server adds, not its simulator).
+- `team_preview_choices(request, game_type="singles")`: in singles one
+  Pokémon leads, so each brought one can (the doubles reading, two leads,
+  never lets the third one lead). `RandomPolicy` passes its game type.
+- `tests/python/test_singles.py`.
+
+### Fixed
+
+- Singles: a move used without a chosen target (resolveAction, a retarget
+  after a faint) takes the foe's slot without a random draw, as Showdown's
+  `getRandomTarget` does in singles. The engine drew `random(1)`, which
+  shifted every later draw.
+- Singles: team preview orders (`Battle.legal_choices`, `Batch`) let each
+  brought Pokémon lead, not only the first two.
+- Singles: a target may be given ("move 1 1") when it is valid, as Showdown
+  accepts it; the engine refused any target.
+- Choices with more parts than active slots ("move 1, move 2" in singles,
+  three parts in doubles) are refused, as Showdown refuses them; the engine
+  ignored the extra parts.
+- Requests: `active` is Showdown's `position < side.active.length`, so the
+  Pokémon in an active slot is active at team preview and after fainting.
+- Requests: `noCancel` as Showdown sets it under Cancel Mod (Flat Rules):
+  when only one side has a request.
+- Requests after a refused choice: `update`, and the refused move disabled
+  with an empty `disabledSource`, as Showdown's `chooseMove` update leaves
+  them; the first refusal of a disabled move is "[Unavailable choice]" even
+  when the request showed it disabled. In singles Imprison's `maybeDisabled`
+  stays and only the refused move is marked (`updateDisabledRequest` skips
+  singles), and picking it again is refused as unavailable again.
+- Requests in doubles with a fainted Pokémon left in its slot: it is not
+  the last active one (Showdown's `isLastActive` needs `isActive`, which
+  fainting clears), and its moves don't show a foe's Imprison (the
+  `DisableMove` pass skips it), as Showdown's requests show them.
+- Windows: the package, the checks and the tests read and write text as
+  UTF-8 (the format export, team pools, the reference server's pipe), not
+  in the locale's code page.
+- `refsim/server.js` names the call sites of Showdown's random draws for a
+  checkout in any directory and with Windows paths.
+
 ## 0.4.0 (2026-11-05)
 
 A native interface for training (`ninjask.Batch`, player-view legal

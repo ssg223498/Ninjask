@@ -229,6 +229,56 @@ Contributions are welcome, and the most valuable ones are concrete:
   setup, the checks a change must pass and how to port a mechanic from
   Showdown.
 
+## Singles: Champions BSS (the `singles-bss` branch)
+
+This branch of the fork `ssg223498/Ninjask` also plays Showdown's
+`[Gen 9 Champions] BSS Reg M-C` (`gen9championsbssregmc`): singles, bring
+six and pick three, Mega Evolution, the Champions stat points, under Flat
+Rules and the VGC timer. The engine fields as many slots per side as the
+format's `gameType` says (`FormatInfo.doubles`); everything else is the
+same code as for doubles.
+
+```sh
+node refsim/export_format.js gen9championsbssregmc > data/derived/format/gen9championsbssregmc.json
+# or let ninjask.dex("gen9championsbssregmc") export it on first use
+python scripts/check_reference.py --format gen9championsbssregmc --pool teams.txt --games 1000 --workers 4 --requests
+```
+
+Verified on 1,000 of 1,000 seeded reference games (36 real singles teams,
+random choices) with logs, state, random draws and every request compared,
+and by `tests/python/test_singles.py` (choices accepted and refused as
+Showdown does, team preview, refused choices and the updated requests).
+Doubles keep their logs and draws (see the CHANGELOG).
+
+### Doubles-only assumptions found, and what this branch does
+
+| Where | Assumption | Singles in Showdown | Here |
+| --- | --- | --- | --- |
+| `battle/choices.rs` `for_each_team_preview_order`, `choices.team_preview_choices` | The first two Pokémon sent lead | One leads | Leads = active slots; `game_type` argument in Python |
+| `moves/targeting.rs` `get_random_target` | A random foe, one draw even with a single foe | `foe.active[0]`, no draw (`getRandomTarget`) | No draw in singles (the one divergence in play: every game diverged without it) |
+| `battle/choices.rs` `parse_slot_choice` | A target is chosen only with two active | A valid target may be given (`chooseMove`) | Accepted when valid |
+| `battle/choices.rs` `parse_choice` | Extra comma parts are ignored | Refused: "You sent choices for 2 Pokémon" | Refused (both game types) |
+| `battle/choices.rs` `side_request_data` | `active` = on the field | `position < side.active.length` | As Showdown (both game types) |
+| `battle/choices.rs` `request_json` | No `noCancel` | Set when only one side has a request (Cancel Mod) | As Showdown (both game types) |
+| `battle/choices.rs` refusals | Imprison's `maybeDisabled` goes after a refusal; all disabled moves shown | `updateDisabledRequest` skips singles: it stays, only the refused move is marked | As Showdown; also `update` and `disabledSource` (both game types) |
+| `moves/use_move.rs` `is_last_active`, `move_shown_disabled` | A fainted Pokémon still in its slot is active | `isActive` is cleared by fainting; Imprison skips it | As Showdown (requests in doubles) |
+| `moves/status_moves.rs` Ally Switch | The ally is in slot 1 | Fails outside doubles and triples | Fails when one slot (it did already, by finding no active Pokémon there) |
+| `scripts/check_reference.py` | The format is Reg M-C | | `--format`, `--requests` |
+
+Already written for any number of slots, and checked unchanged: the
+screens' multiplier (`items/mod.rs`, 1/2 in singles), Follow Me, Rage
+Powder, After You and Quash failing in singles, redirection only with
+more than one active (`RedirectTarget`), the spread modifier (one target
+in singles), `isLastActive` for hidden traps and disables, Imposter's
+target across, Trick-or-Treat's slot-b glitch, Natural Cure's message
+(Showdown's doubles-only cure message is not ported, which is right for
+singles).
+
+Not verified for singles: the tracker (`scripts/check_tracker.py`), the
+numeric observations and actions of `Batch`/`encode`, worlds, and
+outcome enumeration. A player changing a choice before the foe has chosen
+(allowed by Cancel Mod) is refused, as in doubles before this branch.
+
 ## Scope and parity
 
 - **Format.** Champions doubles under the Reg M-C rules: bring 6, pick 4,
@@ -357,7 +407,7 @@ cargo run --release --example fingerprint -- data/derived/format/gen9championsvg
 ```
 
 On the bundled fixture teams (`tests/fixtures/regmc_teams.txt`) the fingerprint is
-`fb8b1d107db9f213`. A change that preserves behaviour must leave it unchanged.
+`468d11e0d5f4cf86`. A change that preserves behaviour must leave it unchanged.
 
 The bench plays random legal games on one thread with logging off: about
 5,400 to 6,700 games/s over ten runs on one core of a 4-vCPU cloud VM (Xeon
