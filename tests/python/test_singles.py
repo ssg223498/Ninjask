@@ -799,3 +799,23 @@ def test_tracker_reads_protect_and_hits(d):
     assert g["attackedBy"] == [{"side": 1, "name": "Kangaskhan", "slot": 0, "move": "doubleedge", "damage": 20,
                                 "thisTurn": False}]
     assert g["lastMoveTargetLoc"] == -1
+
+
+def test_tracker_reads_absorbed_moves_as_failures(d):
+    """A move an ability takes in (Lightning Rod's boost, Volt Absorb's heal) failed (TryHit's null)."""
+    t = ninjask.Tracker(d, "p1")
+    t.feed([
+        "|gametype|singles",
+        "|switch|p1a: Archaludon|Archaludon, L50, M|197/197",
+        "|switch|p2a: Raichu|Raichu, L50, M|100/100",
+        "|turn|1",
+        "|move|p1a: Archaludon|Thunderbolt|p2a: Raichu",
+        "|-ability|p2a: Raichu|Lightning Rod|boost",
+        "|-boost|p2a: Raichu|spa|1",
+        "|",
+        "|upkeep",
+        "|turn|2",
+    ])
+    a = json.loads(t.view())["sides"][0]["pokemon"][0]
+    assert a["moveLastTurnResult"] is False and a["lastMoveTargetLoc"] == 1
+    assert json.loads(t.view())["sides"][1]["pokemon"][0]["timesAttacked"] == 0

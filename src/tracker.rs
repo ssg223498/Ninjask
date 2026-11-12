@@ -989,7 +989,12 @@ impl Tracker {
             }
             "-item" => self.on_item(&l),
             "-enditem" => self.on_enditem(&l),
-            "-ability" => self.on_ability(&l),
+            "-ability" => {
+                // "-ability|X|Lightning Rod|boost": the ability took the move.
+                let named = format!("ability: {}", l.arg(1));
+                self.on_absorbed(l.arg(0), Some(&named));
+                self.on_ability(&l);
+            }
             "-activate" | "-immune" | "-fail" | "-block" => self.on_activate(&l),
             "turn" => {
                 self.turn = l.arg(0).parse().unwrap_or(self.turn);
