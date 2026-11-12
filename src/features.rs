@@ -79,6 +79,8 @@ fn self_boosts(m: &Move) -> Option<&MoveBoosts> {
     if m.target == Target::SelfTarget {
         return m.boosts.as_ref();
     }
+    // `secondaries.len() == 1` stands in for JS `m.secondary` (the dex keeps only the
+    // normalized list); verified against battle-ai's dex for every move.
     let secondary = match m.secondaries.as_slice() {
         [only] => only.self_boosts.as_ref(),
         _ => None,
