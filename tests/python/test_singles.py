@@ -819,3 +819,38 @@ def test_tracker_reads_absorbed_moves_as_failures(d):
     a = json.loads(t.view())["sides"][0]["pokemon"][0]
     assert a["moveLastTurnResult"] is False and a["lastMoveTargetLoc"] == 1
     assert json.loads(t.view())["sides"][1]["pokemon"][0]["timesAttacked"] == 0
+
+
+def _absorbing_team(lead):
+    return "]".join([lead, "Garchomp||Leftovers|RoughSkin|Earthquake,Protect,DragonClaw,SwordsDance|Jolly|||||50|",
+                     "Corviknight||Leftovers|Pressure|Roost,BraveBird,UTurn,BulkUp|Impish|||||50|"])
+
+
+@pytest.mark.parametrize("move,ability", [
+    ("ThunderWave", "LightningRod"),
+    ("ThunderWave", "MotorDrive"),
+    ("LeechSeed", "SapSipper"),
+    ("ThunderWave", "VoltAbsorb"),
+    ("WillOWisp", "FlashFire"),
+])
+def test_world_status_move_an_ability_takes_in_failed(d, move, ability):
+    """A status move an ability takes in failed (TryHit's null), though the
+    ability's own boost (Lightning Rod, Motor Drive, Sap Sipper) shows as a
+    plain `-boost` line: the world's last-turn result is the truth's False."""
+    from ninjask.world_check import true_assumptions
+
+    t1 = _absorbing_team(f"Gengar||Leftovers|CursedBody|{move},Protect,ShadowBall,SludgeBomb|Timid|||||50|")
+    t2 = _absorbing_team(f"Snorlax||Leftovers|{ability}|SwordsDance,BodySlam,Rest,Curse|Adamant|||||50|")
+    b = ninjask.Battle(d, t1, t2, seed=1)
+    b.set_logging(True)
+    for side in ("p1", "p2"):
+        b.choose(side, "team 123")
+    b.choose("p1", "move 1")
+    b.choose("p2", "move 1")
+    tracker = ninjask.Tracker(d, "p1")
+    tracker.feed(b.log("p1", 0))
+    tracker.feed_request(b.request("p1"))
+    truth = json.loads(b.projection())
+    world = json.loads(tracker.world(true_assumptions(json.loads(tracker.view()), truth), 0).projection())
+    assert truth["sides"][0]["pokemon"][0]["moveLastTurnResult"] is False
+    assert world["sides"][0]["pokemon"][0]["moveLastTurnResult"] is False

@@ -407,6 +407,9 @@ struct Act {
     hits: Vec<((usize, usize), u16)>,
     /// A status move changed some stat stage.
     changed: bool,
+    /// An ability took the move in (Lightning Rod): it failed, and the
+    /// ability's own boost that follows is no effect of the move's.
+    absorbed: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -786,6 +789,7 @@ impl Tracker {
                 let dex = self.dex.clone();
                 if let Some(act) = self.act.as_mut().filter(|a| {
                     l.tag("from").is_none()
+                        && !a.absorbed
                         && a.id.is_some_and(|i| dex.mv(i).category == Category::Status)
                 }) {
                     let user = act.user.clone();
@@ -1714,6 +1718,7 @@ impl Tracker {
             will_act,
             hits: Vec::new(),
             changed: false,
+            absorbed: false,
         });
         self.act_result(user, Some(true));
     }
@@ -1776,8 +1781,10 @@ impl Tracker {
         if !ABSORB.contains(&a) {
             return;
         }
-        if let Some(user) = self.act.as_ref().map(|x| x.user.clone()) {
-            if user != target {
+        if let Some(act) = self.act.as_mut() {
+            if act.user != target {
+                act.absorbed = true;
+                let user = act.user.clone();
                 self.act_result(&user, Some(false));
             }
         }
