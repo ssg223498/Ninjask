@@ -49,6 +49,14 @@ fingerprint moved from `fb8b1d107db9f213` to `468d11e0d5f4cf86`. With
   of battle-ai (`scripts/check_worlds.py`, reference games) finds them equal
   to the true battle's for one's own side. In doubles the target location
   of a move chosen without a target is a guess (the foe the line names).
+- `Battle.encode(side)` and `Battle.encode_ids(side)` (Rust:
+  `encode::battle_observation`, `battle_ids`; branch `singles-bss-eval`):
+  the battle itself, everything known, seen from `side`, in
+  `Tracker.encode()` / `encode_ids()`'s layout and value ranges
+  (`ninjask.BATTLE_OBS_LEN` float32, `ninjask.BATTLE_IDS_LEN` int16; own
+  side, foe side, field). Pokémon come in the battle's current order (the
+  projection's), HP is exact on both sides and `seen` is set for every
+  Pokémon brought. A side's block is the same from either side.
 
 ### Fixed
 

@@ -543,6 +543,35 @@ impl PyBattle {
         Ok(f.to_vec())
     }
 
+    /// The battle seen from `side` as `ninjask.BATTLE_OBS_LEN` float32
+    /// values, little-endian bytes for `numpy.frombuffer(..., numpy.float32)`:
+    /// `Tracker.encode()`'s layout (`side`'s own Pokémon, then the foe's,
+    /// then the field), filled from the battle, so with everything known
+    /// (layout: `ninjask::encode::battle_observation`).
+    fn encode<'py>(
+        &self,
+        py: Python<'py>,
+        side: &str,
+    ) -> PyResult<Bound<'py, pyo3::types::PyBytes>> {
+        let mut v = Vec::with_capacity(crate::encode::BATTLE_OBS_LEN);
+        crate::encode::battle_observation(&self.inner, side_index(side)?, &mut v);
+        Ok(le_bytes(py, &v, |x: f32| x.to_le_bytes()))
+    }
+
+    /// The battle's categorical part seen from `side` as
+    /// `ninjask.BATTLE_IDS_LEN` int16 values (`numpy.frombuffer(...,
+    /// numpy.int16)`): `Tracker.encode_ids()`'s layout and value ranges
+    /// (table sizes: `Dex.vocab()`), nothing unknown.
+    fn encode_ids<'py>(
+        &self,
+        py: Python<'py>,
+        side: &str,
+    ) -> PyResult<Bound<'py, pyo3::types::PyBytes>> {
+        let mut v = Vec::with_capacity(crate::encode::BATTLE_IDS_LEN);
+        crate::encode::battle_ids(&self.inner, side_index(side)?, &mut v);
+        Ok(le_bytes(py, &v, |x: i16| x.to_le_bytes()))
+    }
+
     /// The chance that the Pokémon in slot `a` doing `plan_a` acts before
     /// the one in slot `b` doing `plan_b`, and that a speed tie decides it:
     /// `(first, tie)`. A plan is a move id, "switch", or "priority:N" (a
@@ -940,6 +969,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("DEFAULT_MAX_PATHS", crate::DEFAULT_MAX_PATHS)?;
     m.add("OBS_LEN", crate::encode::OBS_LEN)?;
     m.add("IDS_LEN", crate::encode::IDS_LEN)?;
+    m.add("BATTLE_OBS_LEN", crate::encode::BATTLE_OBS_LEN)?;
+    m.add("BATTLE_IDS_LEN", crate::encode::BATTLE_IDS_LEN)?;
     m.add("ACTION_FIELDS", crate::encode::ACTION_FIELDS)?;
     #[cfg(feature = "approx")]
     m.add_function(wrap_pyfunction!(set_approx, m)?)?;

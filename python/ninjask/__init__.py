@@ -22,6 +22,8 @@ if TYPE_CHECKING:
     from ninjask._core import (
         ACTION_FIELDS,
         ACTION_WIDTH,
+        BATTLE_IDS_LEN,
+        BATTLE_OBS_LEN,
         DEFAULT_MAX_PATHS,
         IDS_LEN,
         OBS_LEN,
@@ -44,6 +46,10 @@ else:
     IDS_LEN = _compiled.IDS_LEN
     ACTION_FIELDS = _compiled.ACTION_FIELDS
     ACTION_WIDTH = _compiled.ACTION_WIDTH
+    # Layouts of Battle.encode() and encode_ids(). None from a build that
+    # predates them, so that such a build still imports the package.
+    BATTLE_OBS_LEN = getattr(_compiled, "BATTLE_OBS_LEN", None)
+    BATTLE_IDS_LEN = getattr(_compiled, "BATTLE_IDS_LEN", None)
     DEFAULT_MAX_PATHS = _compiled.DEFAULT_MAX_PATHS
     Outcome = _compiled.Outcome
     EnumerationMode = _compiled.EnumerationMode
@@ -57,6 +63,8 @@ from ninjask.policy import Policy  # noqa: E402
 __all__ = [
     "ACTION_FIELDS",
     "ACTION_WIDTH",
+    "BATTLE_IDS_LEN",
+    "BATTLE_OBS_LEN",
     "Batch",
     "Battle",
     "BattleStateKey",

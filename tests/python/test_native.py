@@ -115,6 +115,44 @@ def test_encodings(d, teams):
     assert (ids[1, :, 0] > 0).sum() == 6  # team preview shows the foe's species
 
 
+def test_battle_encodings(d, teams):
+    """Battle.encode(side) and encode_ids(side): the tracker's layout, filled with everything known."""
+    b = ninjask.Battle(d, teams[2], teams[3], seed=3)
+    b.choose("p1", "team 1234")
+    b.choose("p2", "team 1234")
+    t = ninjask.Tracker(d, "p1")
+    t.feed(b.log("p1", 0))
+    t.feed_battle(b)
+    assert (ninjask.BATTLE_OBS_LEN, ninjask.BATTLE_IDS_LEN) == (ninjask.OBS_LEN, ninjask.IDS_LEN)
+    mon, side = 19, 6 * 19 + 6  # floats per Pokémon and per side (ninjask::encode)
+    obs = {s: np.frombuffer(b.encode(s), np.float32) for s in ("p1", "p2")}
+    ids = {s: np.frombuffer(b.encode_ids(s), np.int16).reshape(2, 6, 7) for s in ("p1", "p2")}
+    assert all(o.shape == (ninjask.BATTLE_OBS_LEN,) for o in obs.values())
+    # A side's block is the same seen from either side; the field is shared.
+    assert (obs["p1"][:side] == obs["p2"][side : 2 * side]).all()
+    assert (obs["p1"][side : 2 * side] == obs["p2"][:side]).all()
+    assert (obs["p1"][2 * side :] == obs["p2"][2 * side :]).all()
+    assert (ids["p1"][0] == ids["p2"][1]).all() and (ids["p1"][1] == ids["p2"][0]).all()
+    # Four brought per side: species, item (1 for none) and ability known; empty slots are 0.
+    vocab = d.vocab()
+    for s in (0, 1):
+        assert (ids["p1"][s, :4, :4] > 0).all() and (ids["p1"][s, 4:] == 0).all()
+    assert ids["p1"][..., 0].max() < vocab["species"] and ids["p1"][..., 1].max() < vocab["items"]
+    assert ids["p1"][..., 2].max() < vocab["abilities"] and ids["p1"][..., 3:].max() < vocab["moves"]
+    # The player's own four brought are fully known to its tracker, in the same order at the start:
+    # the same ids, and the same floats but `seen` (the battle sets it for every Pokémon brought;
+    # the tracker, for those that have been in). The tracker also lists the two left out (species
+    # only), which the battle doesn't have.
+    view_ids = np.frombuffer(t.encode_ids(), np.int16).reshape(2, 6, 7)
+    assert (view_ids[0, :4] == ids["p1"][0, :4]).all()
+    view = np.frombuffer(t.encode(), np.float32)[: 6 * mon].reshape(6, mon)[:4]
+    mine = obs["p1"][: 6 * mon].reshape(6, mon)
+    assert (np.delete(view, 2, axis=1) == np.delete(mine[:4], 2, axis=1)).all()
+    assert (mine[:4, 2] == 1).all() and (mine[4:] == 0).all()
+    with pytest.raises(ValueError):
+        b.encode("p3")
+
+
 def test_batch_matches_single_battles(d, teams):
     """A Batch plays exactly as each battle alone, with the same choices."""
     n = 8

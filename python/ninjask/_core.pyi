@@ -7,6 +7,10 @@ OBS_LEN: int
 """Floats in `Tracker.encode()` (layout: `ninjask::encode::observation`)."""
 IDS_LEN: int
 """Values in `Tracker.encode_ids()` (layout: `ninjask::encode::ids`)."""
+BATTLE_OBS_LEN: int
+"""Floats in `Battle.encode(side)` (layout: `ninjask::encode::battle_observation`, `OBS_LEN`'s)."""
+BATTLE_IDS_LEN: int
+"""Values in `Battle.encode_ids(side)` (layout: `ninjask::encode::battle_ids`, `IDS_LEN`'s)."""
 ACTION_FIELDS: int
 """Values per active slot in an action row (kind, index, target, Mega Evolution)."""
 ACTION_WIDTH: int
@@ -133,6 +137,12 @@ class Battle:
     def eval_features(self, side: str) -> list[float]:
         """battle-ai's "v2" evaluator features (22 floats, Rust `ninjask::features::FEATURES_V2`) from
         `side`'s point of view, with the calculations of `damage_party` / `order_party`; p2's are p1's negated."""
+    def encode(self, side: str) -> bytes:
+        """The battle seen from `side` as `BATTLE_OBS_LEN` float32 values (`numpy.frombuffer(..., numpy.float32)`):
+        `Tracker.encode()`'s layout, own side, foe side, field, filled with everything known."""
+    def encode_ids(self, side: str) -> bytes:
+        """The battle's species, items, abilities and moves seen from `side` as `BATTLE_IDS_LEN` int16 values:
+        `Tracker.encode_ids()`'s layout and ranges (`Dex.vocab()`), nothing unknown."""
     def speeds(self) -> str:
         """Each active Pokémon's effective Speed, `{"p1a": speed, ...}`, as JSON."""
     @property
