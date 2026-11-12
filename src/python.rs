@@ -157,6 +157,21 @@ impl PyDex {
         Ok(support::move_support(&self.inner, self.inner.mv(id)).to_string())
     }
 
+    /// What `Battle.eval_features` reads of a move: `(setup, heal,
+    /// priority)`. `setup`: a status move whose boosts to its user add up
+    /// to 1 or more over the positive ones (`boosts` for a move targeting
+    /// its user, else `self.boosts`, else its secondary effect's
+    /// `self.boosts`); `heal`: the heal flag on a move targeting its user;
+    /// `priority`: the dex priority.
+    fn eval_move_marks(&self, move_id: &str) -> PyResult<(bool, bool, i8)> {
+        let id = self
+            .inner
+            .move_id(move_id)
+            .ok_or_else(|| PyValueError::new_err(format!("unknown move {move_id}")))?;
+        let m = self.inner.move_marks(id);
+        Ok((m.setup, m.heal, m.priority))
+    }
+
     /// Ids of all species in this format's data.
     fn species_ids(&self) -> Vec<String> {
         self.inner.species.iter().map(|s| s.id.clone()).collect()
@@ -512,6 +527,20 @@ impl PyBattle {
             .order_odds_party(ra, self.plan(plan_a)?, rb, self.plan(plan_b)?)
             .map_err(PyValueError::new_err)?;
         Ok((o.first, o.tie))
+    }
+
+    /// battle-ai's "v2" evaluator features from `side`'s point of view: 22
+    /// floats in the order of Rust's `ninjask::features::FEATURES_V2` (and
+    /// battle-ai's), counted from the battle with the calculations
+    /// of `damage_party` and `order_party`, without building the
+    /// projection. `eval_features("p2")` is `eval_features("p1")` negated.
+    /// The battle is left as it was.
+    fn eval_features(&self, py: Python<'_>, side: &str) -> PyResult<Vec<f64>> {
+        let s = side_index(side)?;
+        let f = py
+            .detach(|| self.inner.eval_features(s))
+            .map_err(PyValueError::new_err)?;
+        Ok(f.to_vec())
     }
 
     /// The chance that the Pokémon in slot `a` doing `plan_a` acts before

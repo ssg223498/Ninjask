@@ -31,6 +31,13 @@ fingerprint moved from `fb8b1d107db9f213` to `468d11e0d5f4cf86`. With
   side's first slot, switched in with nothing happening on the way in: the
   battle's field, weather and side conditions, no boosts. Pointing at
   Pokémon on the field gives exactly `damage` and `order`.
+- `Battle.eval_features(side)` (Rust: `Battle::eval_features`,
+  `ninjask::features`; branch `singles-bss-eval`): battle-ai's "v2"
+  evaluator features, 22 floats from `side`'s point of view (the order of
+  `features::FEATURES_V2`), counted from the battle without building the
+  projection, with the calculations of `damage_party` / `order_party`
+  (each pair's view made once and reused). `Dex.eval_move_marks(move_id)`
+  gives what they read of a move: `(setup, heal, priority)`.
 
 ### Fixed
 

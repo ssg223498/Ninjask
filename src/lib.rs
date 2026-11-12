@@ -53,6 +53,7 @@ pub mod conditions;
 pub mod dex;
 pub mod encode;
 pub mod events;
+pub mod features;
 pub mod items;
 pub mod kinds;
 pub mod moves;

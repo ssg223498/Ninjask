@@ -60,6 +60,8 @@ class Dex:
     def implemented_moves(self) -> list[str]: ...
     def supported_abilities(self) -> list[str]: ...
     def supported_items(self) -> list[str]: ...
+    def eval_move_marks(self, move_id: str) -> tuple[bool, bool, int]:
+        """`(setup, heal, priority)` as `Battle.eval_features` reads a move."""
     def vocab(self) -> dict[str, int]:
         """Embedding-table sizes for `Tracker.encode_ids()`: "species", "items", "abilities", "moves"."""
 
@@ -128,6 +130,9 @@ class Battle:
         `sides[i]["pokemon"]`); a benched one counts as in its side's slot, with no boosts."""
     def order_party(self, a: str, plan_a: str, b: str, plan_b: str) -> tuple[float, float]:
         """`order` for any Pokémon of a party, named as in `damage_party`."""
+    def eval_features(self, side: str) -> list[float]:
+        """battle-ai's "v2" evaluator features (22 floats, Rust `ninjask::features::FEATURES_V2`) from
+        `side`'s point of view, with the calculations of `damage_party` / `order_party`; p2's are p1's negated."""
     def speeds(self) -> str:
         """Each active Pokémon's effective Speed, `{"p1a": speed, ...}`, as JSON."""
     @property

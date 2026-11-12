@@ -271,7 +271,7 @@ impl Battle {
 
     /// Whether `r` is in one of its side's active slots (the Pokémon there
     /// may have fainted); an error when there is no such Pokémon.
-    fn in_active_slot(&self, (s, i): MonRef) -> Result<bool, String> {
+    pub(crate) fn in_active_slot(&self, (s, i): MonRef) -> Result<bool, String> {
         if s >= self.sides.len() || i >= self.sides[s].mons.len() {
             return Err(format!("no Pokémon {i} on side {s}"));
         }
