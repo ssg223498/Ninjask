@@ -7,6 +7,11 @@
 //!
 //! - **one's own side** as the view holds it: species, exact HP and stats,
 //!   item, ability, moves with PP, status, boosts, volatiles, types;
+//! - **the move history** the view reads from the log: the field's last
+//!   move, and per Pokémon where its last move was aimed, this and last
+//!   turn's move result, the hits it took since it came in (a foe's damage
+//!   as its share of the world's max HP), the Protect stall counter, the
+//!   item it used up and whether it ate a berry;
 //! - **the field** and every condition the view knows (weather, terrain,
 //!   rooms, Gravity, Fairy Lock, side and slot conditions), with the turns
 //!   left the view can count;
@@ -304,6 +309,7 @@ impl<'a> Builder<'a> {
         b.log_enabled = false;
         b.turn = view.turn;
         b.request = RequestState::Move;
+        b.turn_state.last_move = view.last_move;
         // Which view Pokémon go where on each side.
         let orders = [self.order(0), self.order(1)];
         for (s, order) in orders.iter().enumerate() {
@@ -553,6 +559,11 @@ impl<'a> Builder<'a> {
             }
         }
         mon.last_move = m.last_move;
+        // Kept off the field too: where its last move was aimed, the item it
+        // used up, a berry eaten.
+        mon.last_move_target_loc = m.last_move_target_loc;
+        mon.last_item = m.last_item;
+        mon.ate_berry = m.ate_berry;
         mon.is_active = m.slot.is_some() && m.slot == Some(position) || (position < 2 && m.fainted);
         if !mon.is_active || mon.fainted {
             // Off the field: nothing that lasts only while on it.
@@ -571,6 +582,27 @@ impl<'a> Builder<'a> {
         mon.hurt_this_turn = m.hurt_this_turn.then_some(1);
         mon.stats_raised_this_turn = m.stats_raised_this_turn;
         mon.stats_lowered_this_turn = m.stats_lowered_this_turn;
+        mon.move_this_turn_result = m.move_this_turn;
+        mon.move_last_turn_result = m.move_last_turn;
+        mon.times_attacked = m.times_attacked;
+        // The hits taken: a foe's damage is a share of its HP.
+        mon.attacked_by = m
+            .attacked_by
+            .iter()
+            .map(|a| Attacker {
+                side: a.side as u8,
+                name: a.name.as_str().into(),
+                damage: if own {
+                    a.damage as u32
+                } else {
+                    (a.damage as u32 * mon.maxhp as u32 + 50) / 100
+                },
+                mv: a.mv,
+                this_turn: a.this_turn,
+                slot: (a.side as u8, a.slot as u8),
+                numbered: true,
+            })
+            .collect();
         if own {
             mon.illusion = m.shown_as.clone();
         }
@@ -579,7 +611,11 @@ impl<'a> Builder<'a> {
                 mon.ability_state.fallen = Some(n);
             }
         }
-        if !m.volatiles.is_empty() || m.locked.is_some() || m.ally_switch.is_some() {
+        if !m.volatiles.is_empty()
+            || m.locked.is_some()
+            || m.ally_switch.is_some()
+            || m.stall.is_some()
+        {
             let vols = self.volatiles_json(s, m, &mon);
             let stamp = mon.vol.added;
             mon.vol = crate::projection::projected_volatiles(dex, &vols);
@@ -703,6 +739,12 @@ impl<'a> Builder<'a> {
             out.insert(
                 "lockedmove".into(),
                 json!({"duration": left, "trueDuration": left, "move": mv}),
+            );
+        }
+        if let Some((counter, duration)) = m.stall {
+            out.insert(
+                "stall".into(),
+                json!({"counter": counter, "duration": duration}),
             );
         }
         if let Some((counter, turn)) = m.ally_switch {

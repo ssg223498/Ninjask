@@ -13,6 +13,7 @@ use serde_json::Value;
 
 use crate::dex::types::*;
 use crate::dex::Dex;
+use crate::kinds::MoveKind;
 use crate::state::{SideCond, Terrain, Weather};
 
 /// What a player knows about a held item.
@@ -136,6 +137,44 @@ pub struct MonView {
     pub illusion_broken: bool,
     /// The nature an open team sheet showed.
     pub nature: Option<String>,
+    /// Where its last move of its own was aimed (Showdown `lastMoveTargetLoc`:
+    /// -1 its own slot a, 1 the foe's slot a...). It stays when the Pokémon
+    /// leaves the field.
+    pub last_move_target_loc: i8,
+    /// The result of its move this turn and last turn (Showdown
+    /// `moveThisTurnResult`, `moveLastTurnResult`: Stomping Tantrum):
+    /// `Some(false)` a failure, `None` neither (no move, recharging, a
+    /// charging turn, a move that hit nothing without failing, Protect's).
+    pub move_this_turn: Option<bool>,
+    pub move_last_turn: Option<bool>,
+    /// Hits taken since it came in (`timesAttacked`: Rage Fist).
+    pub times_attacked: u16,
+    /// The damaging hits taken since it came in (`attackedBy`: Revenge,
+    /// Avalanche, Counter), oldest first.
+    pub attacked_by: Vec<AttackView>,
+    /// The consecutive-protection counter (`stall`): the counter and the
+    /// residual phases it lasts.
+    pub stall: Option<(u16, u8)>,
+    /// The item it last used up (`lastItem`: Recycle, Harvest), kept off
+    /// the field.
+    pub last_item: Option<ItemId>,
+    /// Has eaten a berry (`ateBerry`: Belch).
+    pub ate_berry: bool,
+}
+
+/// A damaging hit a Pokémon took (Showdown's `attackedBy` entry).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AttackView {
+    pub side: usize,
+    /// The attacker's name in its side's idents.
+    pub name: String,
+    /// The attacker's slot when it hit.
+    pub slot: usize,
+    pub mv: MoveId,
+    /// HP the last hit took: exact on one's own side, percentage points on
+    /// the foe's.
+    pub damage: u16,
+    pub this_turn: bool,
 }
 
 /// A transformed Pokémon's view from before: its moves and abilities.
@@ -217,6 +256,11 @@ impl MonView {
         self.stats_lowered_this_turn = false;
         self.cud_chew = false;
         self.illusion_broken = false;
+        self.move_this_turn = None;
+        self.move_last_turn = None;
+        self.times_attacked = 0;
+        self.attacked_by.clear();
+        self.stall = None;
     }
     /// `src`'s field state, for the Pokémon that turned out to be the one
     /// on the field (an Illusion seen through).
@@ -234,6 +278,11 @@ impl MonView {
         self.stats_raised_this_turn = src.stats_raised_this_turn;
         self.stats_lowered_this_turn = src.stats_lowered_this_turn;
         self.cud_chew = src.cud_chew;
+        self.move_this_turn = src.move_this_turn;
+        self.move_last_turn = src.move_last_turn;
+        self.times_attacked = src.times_attacked;
+        self.attacked_by.clone_from(&src.attacked_by);
+        self.stall = src.stall;
     }
     /// Effects that end when the Pokémon leaves the field; a copied ability
     /// (Trace) reverts to the base one.
@@ -344,6 +393,22 @@ struct MoveLine {
     lock_uses: Option<u8>,
 }
 
+/// The move being carried out, from its `move` line until the next move,
+/// switch, `cant` or turn line: whose result and hit records its lines
+/// change.
+#[derive(Clone, Debug, Default)]
+struct Act {
+    user: String,
+    id: Option<MoveId>,
+    /// Some target (another Pokémon) has yet to act this turn (Showdown's
+    /// `queue.willAct()`, which Protect needs).
+    will_act: bool,
+    /// Per target hit (side, index): the hits counted so far.
+    hits: Vec<((usize, usize), u16)>,
+    /// A status move changed some stat stage.
+    changed: bool,
+}
+
 #[derive(Clone, Debug)]
 pub struct Tracker {
     dex: Arc<Dex>,
@@ -373,6 +438,11 @@ pub struct Tracker {
     /// The Pokémon whose Cud Chew just activated: its next `-enditem` is
     /// the berry eaten again.
     cud_eat: Option<String>,
+    /// The last move used on the field (Showdown `battle.lastMove`: Copycat).
+    pub last_move: Option<MoveId>,
+    act: Option<Act>,
+    /// `|gametype|singles` (`Some(false)` for another game type).
+    singles: Option<bool>,
 }
 
 /// A parsed protocol line: kind, positional arguments, `[key] value` tags.
@@ -500,6 +570,9 @@ impl Tracker {
             called_move: None,
             move_line: None,
             cud_eat: None,
+            last_move: None,
+            act: None,
+            singles: None,
         }
     }
 
@@ -576,6 +649,11 @@ impl Tracker {
             self.called_move = None;
             self.move_line = None;
         }
+        // A move's own lines end before the next action (a switch, or a
+        // `drag` after the move) and the residual phase.
+        if matches!(l.kind, "turn" | "upkeep" | "cant" | "switch" | "drag" | "") {
+            self.act = None;
+        }
         match l.kind {
             "player" => {
                 if let Some(s) = side_index(l.arg(0)) {
@@ -584,6 +662,7 @@ impl Tracker {
                     }
                 }
             }
+            "gametype" => self.singles = Some(l.arg(0) == "singles"),
             "teamsize" => {
                 if let Some(s) = side_index(l.arg(0)) {
                     self.sides[s].team_size = l.arg(1).parse().unwrap_or(0);
@@ -647,15 +726,22 @@ impl Tracker {
                 }
             }
             "-damage" | "-heal" | "-sethp" => {
-                // Hitting itself in confusion aborts the move: Destiny Bond ends.
+                // Hitting itself in confusion aborts the move: Destiny Bond
+                // ends, and the move counts as failed.
                 if l.tag("from") == Some("confusion") {
                     if let Some(m) = self.mon_mut(l.arg(0)) {
                         m.remove_volatile("destinybond");
+                        m.move_this_turn = Some(false);
                     }
                 }
+                let before = self.mon_mut(l.arg(0)).map(|m| m.hp);
                 self.on_hp(&l);
                 if l.kind == "-damage" {
                     self.on_damage(&l);
+                    self.on_hit(&l, before);
+                }
+                if l.kind == "-heal" {
+                    self.on_absorbed(l.arg(0), l.tag("from"));
                 }
                 // "-heal|X|...|[from] move: Wish|[wisher] W", Healing Wish's.
                 if l.kind == "-heal" {
@@ -692,6 +778,24 @@ impl Tracker {
                 }
                 // Item boosts (seeds, White Herb) follow the item's `-enditem`.
                 self.attribute(&l, l.arg(0));
+                if l.kind == "-boost" {
+                    self.on_absorbed(l.arg(0), l.tag("from"));
+                }
+                // A status move whose stat changes all changed nothing (at +6)
+                // failed.
+                let dex = self.dex.clone();
+                if let Some(act) = self.act.as_mut().filter(|a| {
+                    l.tag("from").is_none()
+                        && a.id.is_some_and(|i| dex.mv(i).category == Category::Status)
+                }) {
+                    let user = act.user.clone();
+                    if n != 0 {
+                        act.changed = true;
+                        self.act_result(&user, Some(true));
+                    } else if !act.changed {
+                        self.act_result(&user, Some(false));
+                    }
+                }
             }
             "-setboost" => {
                 let n: i8 = l.arg(2).parse().unwrap_or(0);
@@ -773,7 +877,10 @@ impl Tracker {
             "-fieldstart" | "-fieldend" => self.on_field(&l),
             "-sidestart" | "-sideend" => self.on_side(&l),
             "-swapsideconditions" => self.swap_side_conditions(),
-            "-start" => self.on_start(&l),
+            "-start" => {
+                self.on_absorbed(l.arg(0), Some(l.arg(1)));
+                self.on_start(&l);
+            }
             "-end" => self.on_end(&l),
             // Wide Guard and Quick Guard are announced on their user and last the turn.
             "-singleturn" => {
@@ -789,6 +896,20 @@ impl Tracker {
                 if l.arg(1) == "move: Endure" {
                     if let Some(m) = self.mon_mut(l.arg(0)) {
                         m.add_volatile("endure");
+                    }
+                }
+                // Protection (and Endure, Quick Guard, Wide Guard) went up:
+                // the stall counter starts at 3 or triples (to 729), for two
+                // residual phases.
+                let guard = side_cond(l.arg(1)).is_some_and(|c| c.is_guard());
+                if guard || matches!(l.arg(1), "Protect" | "move: Protect" | "move: Endure") {
+                    if let Some(m) = self.mon_mut(l.arg(0)) {
+                        let counter = match m.stall {
+                            None => 3,
+                            Some((c, _)) if c < 729 => c * 3,
+                            Some((c, _)) => c,
+                        };
+                        m.stall = Some((counter, 2));
                     }
                 }
             }
@@ -815,8 +936,13 @@ impl Tracker {
             }
             // A charging move that fires at once (Electro Shot in rain).
             "-anim" => {
-                if let Some(m) = self.mon_mut(l.arg(0)) {
+                let charged = self.mon_mut(l.arg(0)).is_some_and(|m| {
+                    let charging = m.has_volatile("twoturnmove");
                     m.remove_volatile("twoturnmove");
+                    charging
+                });
+                if charged {
+                    self.act_result(l.arg(0), Some(true));
                 }
             }
             "-prepare" => {
@@ -826,6 +952,32 @@ impl Tracker {
                 if l.tag("premajor").is_none() {
                     if let Some(m) = self.mon_mut(l.arg(0)) {
                         m.add_volatile("twoturnmove");
+                    }
+                    // A charging turn is no result.
+                    self.act_result(l.arg(0), None);
+                }
+            }
+            // A move's miss is its failure.
+            "-miss" => {
+                if let Some(user) = self.act.as_ref().map(|a| a.user.clone()) {
+                    if user == l.arg(0) {
+                        self.act_result(&user, Some(false));
+                    }
+                }
+            }
+            // "-hitcount|TARGET|N": a hit a substitute took counts too, when
+            // the last one landed.
+            "-hitcount" => {
+                let n: u16 = l.arg(1).parse().unwrap_or(0);
+                let t = self.mon_index(l.arg(0));
+                let seen = self
+                    .act
+                    .as_ref()
+                    .and_then(|a| a.hits.iter().find(|(r, _)| Some(*r) == t).map(|(_, c)| *c));
+                if let (Some((s, k)), Some(c)) = (t, seen) {
+                    if n > c {
+                        let m = &mut self.sides[s].mons[k];
+                        m.times_attacked = m.times_attacked.saturating_add(n - c);
                     }
                 }
             }
@@ -1399,13 +1551,43 @@ impl Tracker {
         let name = l.arg(1).to_string();
         self.called_move = None;
         self.move_line = None;
+        let id = self.dex.move_id(&name);
+        // The field's last move: every move used, called and bounced ones too.
+        if id.is_some() {
+            self.last_move = id;
+        }
+        let prev = self.act.take();
         // A move an ability made the Pokémon use (Magic Bounce) shows the
         // ability, not one of its moves.
         if let Some(Named::Ability(a)) = l.tag("from").map(named) {
             let (user, a) = (user.to_string(), a.to_string());
             self.reveal_ability(&user, &a);
+            // The bounced move failed for its user (TryHit's null counts as a
+            // failure), and its result is the holder's.
+            if let Some(p) = prev {
+                if p.user != user {
+                    self.act_result(&p.user, Some(false));
+                }
+            }
+            self.start_act(&user, id);
             return;
         }
+        // The Pokémon's own action (`moveUsed`): not a move another move
+        // called; a rampage's or a charged move's later turns are.
+        let own = match l.tag("from").map(named) {
+            None => true,
+            Some(Named::Move(caller)) => caller == name,
+            Some(Named::Other(o)) => o == "lockedmove",
+            _ => false,
+        };
+        if own {
+            if let Some(loc) = id.and_then(|id| self.target_loc(user, id, l.arg(2))) {
+                if let Some(m) = self.mon_mut(user) {
+                    m.last_move_target_loc = loc;
+                }
+            }
+        }
+        self.start_act(user, id);
         if let Some(m) = self.mon_mut(user) {
             m.acted_this_turn = true;
         }
@@ -1512,9 +1694,228 @@ impl Tracker {
         self.move_line = Some(ml);
     }
 
+    /// A `move` line starts the move's own lines: it succeeds unless they
+    /// show otherwise.
+    fn start_act(&mut self, user: &str, id: Option<MoveId>) {
+        let me = self.mon_index(user);
+        let will_act = (0..2).any(|s| {
+            self.sides[s].mons.iter().enumerate().any(|(k, m)| {
+                Some((s, k)) != me && m.slot.is_some() && !m.fainted && !m.acted_this_turn
+            })
+        });
+        self.act = Some(Act {
+            user: user.to_string(),
+            id,
+            will_act,
+            hits: Vec::new(),
+            changed: false,
+        });
+        self.act_result(user, Some(true));
+    }
+
+    /// `act` is a status move aimed at a foe behind a substitute, which it
+    /// doesn't bypass.
+    fn status_move_subbed(&self, act: &Act) -> bool {
+        let Some(id) = act.id else { return false };
+        let mv = self.dex.mv(id);
+        let aimed = !matches!(
+            mv.target,
+            Target::SelfTarget
+                | Target::All
+                | Target::AllySide
+                | Target::AllyTeam
+                | Target::FoeSide
+                | Target::AdjacentAllyOrSelf
+        );
+        let Some((us, uk)) = self.mon_index(&act.user) else {
+            return false;
+        };
+        let infiltrator = self.dex.ability_id("Infiltrator");
+        mv.category == Category::Status
+            && aimed
+            && !mv.has(MoveFlag::BypassSub)
+            && (infiltrator.is_none() || self.sides[us].mons[uk].ability != infiltrator)
+            && self.sides[1 - us]
+                .mons
+                .iter()
+                .any(|m| m.slot.is_some() && !m.fainted && m.has_volatile("substitute"))
+    }
+
+    /// The result of `who`'s move this turn.
+    fn act_result(&mut self, who: &str, result: Option<bool>) {
+        if let Some(m) = self.mon_mut(who) {
+            m.move_this_turn = result;
+        }
+    }
+
+    /// An ability that took the move in (Volt Absorb's heal, Motor Drive's
+    /// boost, Flash Fire): TryHit's null, a failure.
+    fn on_absorbed(&mut self, target: &str, effect: Option<&str>) {
+        const ABSORB: [&str; 12] = [
+            "Volt Absorb",
+            "Water Absorb",
+            "Dry Skin",
+            "Earth Eater",
+            "Motor Drive",
+            "Lightning Rod",
+            "Storm Drain",
+            "Sap Sipper",
+            "Flash Fire",
+            "Well-Baked Body",
+            "Wind Rider",
+            "Eelevate",
+        ];
+        let Some(Named::Ability(a)) = effect.map(named) else {
+            return;
+        };
+        if !ABSORB.contains(&a) {
+            return;
+        }
+        if let Some(user) = self.act.as_ref().map(|x| x.user.clone()) {
+            if user != target {
+                self.act_result(&user, Some(false));
+            }
+        }
+    }
+
+    /// Showdown's target location for a move chosen without a target: the
+    /// user's own slot for a move on itself or its side, nothing for one
+    /// only an ally can take in singles, else the foe (in doubles, the
+    /// Pokémon the line names).
+    fn target_loc(&self, user: &str, id: MoveId, shown: &str) -> Option<i8> {
+        let (s, Some(slot), _) = parse_ref(user)? else {
+            return None;
+        };
+        let mv = self.dex.mv(id);
+        let singles = self.singles.unwrap_or_else(|| {
+            (0..2).all(|x| self.sides[x].mons.iter().all(|m| m.slot.unwrap_or(0) == 0))
+        });
+        // Champions: Curse is a move on the user unless it is a Ghost type.
+        let ghost = self.dex.type_id("Ghost");
+        let curse_self = mv.id == "curse"
+            && !self.mon_index(user).is_some_and(|(us, uk)| {
+                let m = &self.sides[us].mons[uk];
+                let types = self.current_types(m).unwrap_or_default();
+                ghost.is_some_and(|g| types.contains(&g))
+            });
+        let own = -(slot as i8 + 1);
+        Some(match mv.target {
+            _ if curse_self => own,
+            Target::SelfTarget
+            | Target::All
+            | Target::AllySide
+            | Target::AllyTeam
+            | Target::AdjacentAllyOrSelf => own,
+            Target::AdjacentAlly if singles => 0,
+            _ if singles => 1,
+            _ => match parse_ref(shown) {
+                Some((ts, Some(tslot), _)) if ts == s => -(tslot as i8 + 1),
+                Some((_, Some(tslot), _)) => tslot as i8 + 1,
+                _ => 1,
+            },
+        })
+    }
+
+    /// A move's hit on another Pokémon (`-damage` without a source): it
+    /// counts in the target's `timesAttacked`, and its `attackedBy` keeps the
+    /// attacker with the HP the last hit took. `before` is the target's HP
+    /// before the line.
+    fn on_hit(&mut self, l: &Line, before: Option<u16>) {
+        if l.tag("from").is_some() {
+            return;
+        }
+        let Some(act) = self.act.as_ref() else { return };
+        let Some(id) = act.id else { return };
+        if self.dex.mv(id).category == Category::Status || act.user == l.arg(0) {
+            return;
+        }
+        let (Some(t), Some((us, uk))) = (self.mon_index(l.arg(0)), self.mon_index(&act.user))
+        else {
+            return;
+        };
+        if t == (us, uk) {
+            return;
+        }
+        let slot = parse_ref(&act.user).and_then(|(_, sl, _)| sl).unwrap_or(0);
+        let name = self.sides[us].mons[uk].name.clone();
+        let act = self.act.as_mut().unwrap();
+        let first = match act.hits.iter_mut().find(|(r, _)| *r == t) {
+            Some(e) => {
+                e.1 += 1;
+                false
+            }
+            None => {
+                act.hits.push((t, 1));
+                true
+            }
+        };
+        let m = &mut self.sides[t.0].mons[t.1];
+        let damage = before.unwrap_or(m.hp).saturating_sub(m.hp);
+        m.times_attacked = m.times_attacked.saturating_add(1);
+        if first {
+            m.attacked_by.push(AttackView {
+                side: us,
+                name,
+                slot,
+                mv: id,
+                damage,
+                this_turn: true,
+            });
+        } else if let Some(a) = m.attacked_by.last_mut() {
+            a.damage = damage;
+        }
+    }
+
     /// `-fail|USER`: the move just used did nothing.
     fn on_fail(&mut self, l: &Line) {
         let who = l.arg(0);
+        // The move failed (`-fail` on its user or a target). One an ability
+        // or item caused stopped only an effect (Clear Body against Parting
+        // Shot's drops): a move that fails with it shows a plain `-fail` of
+        // its user too. A user without the type for Burn Up or Double Shock
+        // (and Teatime with no berry) is no result; some lines are no failure
+        // at all: the heal moves that return NOT_FAIL at full HP (Moonlight,
+        // Swallow, Heal Pulse, Pollen Puff; not Recover or Roost), Ally
+        // Switch without an ally, Corrosive Gas on no item.
+        if let Some(act) = self.act.clone() {
+            let kind = act.id.map(|i| self.dex.move_kind[i as usize]);
+            let fine = match l.arg(1) {
+                "heal" => matches!(
+                    kind,
+                    Some(
+                        MoveKind::WeatherHeal
+                            | MoveKind::Swallow
+                            | MoveKind::PollenPuff
+                            | MoveKind::HealPulse
+                    )
+                ),
+                "move: Ally Switch" | "move: Corrosive Gas" => true,
+                // A status move a substitute blocked did nothing, as a
+                // success (its TryPrimaryHit's null keeps the target).
+                "" => act.user == who && self.status_move_subbed(&act),
+                _ => false,
+            };
+            if l.tag("from").is_none() && !fine {
+                let none = matches!(
+                    l.arg(1),
+                    "move: Burn Up" | "move: Double Shock" | "move: Teatime" | "move: Aura Wheel"
+                );
+                self.act_result(&act.user, (!none).then_some(false));
+            }
+            // Protection that lost its roll (another Pokémon still to act):
+            // the counter ends.
+            let stalls = act.id.is_some_and(|i| {
+                matches!(
+                    self.dex.move_kind[i as usize],
+                    MoveKind::Protect(_) | MoveKind::Endure
+                )
+            });
+            if act.user == who && act.will_act && stalls {
+                if let Some(m) = self.mon_mut(who) {
+                    m.stall = None;
+                }
+            }
+        }
         let Some(ml) = self.move_line.clone() else {
             return;
         };
@@ -1595,6 +1996,26 @@ impl Tracker {
     fn on_new_turn(&mut self) {
         let turn = self.turn;
         self.upkeep_done = false;
+        // endTurn: the hits taken stop being this turn's, and those whose
+        // attacker has left the field are forgotten.
+        let on_field: Vec<(usize, String)> = (0..2)
+            .flat_map(|s| {
+                self.sides[s]
+                    .mons
+                    .iter()
+                    .filter(|m| m.slot.is_some() && !m.fainted)
+                    .map(move |m| (s, m.name.clone()))
+            })
+            .collect();
+        for side in self.sides.iter_mut() {
+            for m in side.mons.iter_mut().filter(|m| m.slot.is_some()) {
+                m.attacked_by.retain_mut(|a| {
+                    a.this_turn = false;
+                    on_field.iter().any(|(s, n)| *s == a.side && *n == a.name)
+                });
+                m.move_last_turn = m.move_this_turn.take();
+            }
+        }
         for side in self.sides.iter_mut() {
             for m in side.mons.iter_mut() {
                 m.hurt_this_turn = false;
@@ -1629,6 +2050,10 @@ impl Tracker {
                 }
             }
             for m in side.mons.iter_mut() {
+                // The stall counter's residual: it ends after two.
+                if let Some((c, d)) = m.stall {
+                    m.stall = (d > 1).then_some((c, d - 1));
+                }
                 m.remove_volatile("endure");
                 if m.ally_switch.is_some_and(|(_, t)| turn > t) {
                     m.ally_switch = None;
@@ -1684,6 +2109,7 @@ impl Tracker {
         }
         m.transformed = t.transformed.or(t.species);
         m.boosts = t.boosts;
+        m.times_attacked = t.times_attacked;
         m.added_type = t.added_type;
         m.types.clone_from(&t.types);
         m.moves = t
@@ -1715,6 +2141,9 @@ impl Tracker {
         };
         if let Some(m) = self.mon_mut(&stopped) {
             m.acted_this_turn = true;
+            // A move that didn't happen failed, unless the Pokémon had no
+            // choice (recharging).
+            m.move_this_turn = (reason != "recharge").then_some(false);
         }
         if let Some(m) = self.mon_mut(l.arg(0)) {
             // Glaive Rush's drawback ends before the next move, used or not;
@@ -2176,6 +2605,28 @@ impl Tracker {
             m.item = ItemView::Known(id);
             m.prev_item = None;
         }
+        // An item used up comes back (Recycle, Harvest), or another's is
+        // picked up (Pickup): it is no longer the last one used.
+        match l.tag("from") {
+            Some("move: Recycle" | "ability: Harvest") => {
+                if let Some(m) = self.mon_mut(l.arg(0)) {
+                    m.last_item = None;
+                }
+            }
+            Some("ability: Pickup") => {
+                let picker = self.mon_index(l.arg(0));
+                let from = (0..2)
+                    .flat_map(|x| (0..self.sides[x].mons.len()).map(move |k| (x, k)))
+                    .find(|&(x, k)| {
+                        let m = &self.sides[x].mons[k];
+                        Some((x, k)) != picker && m.slot.is_some() && m.last_item == Some(id)
+                    });
+                if let Some((x, k)) = from {
+                    self.sides[x].mons[k].last_item = None;
+                }
+            }
+            _ => {}
+        }
         // Pickpocket is the new holder's ability; Frisk's holder is "[of]".
         match l.tag("from") {
             Some("ability: Pickpocket") => self.reveal_ability(l.arg(0), "Pickpocket"),
@@ -2217,6 +2668,34 @@ impl Tracker {
         // Chew is eating it now.
         let again = self.cud_eat.take().is_some_and(|c| c == who);
         let berry = id.is_some_and(|i| self.dex.item(i).is_berry);
+        // Used up (Showdown's `lastItem`): eaten, or used (`useItem`: Focus
+        // Sash, a seed, Red Card's "[of]"; a gem's; Fling's). Not when taken
+        // (Knock Off, Thief, Bug Bite, Corrosive Gas) or popped (Air
+        // Balloon); Cud Chew eats the same berry again.
+        let eaten = l.tag("eat").is_some();
+        let used = match l.tag("from") {
+            None => {
+                !eaten
+                    && l.tag("silent").is_none()
+                    && l.tag("weaken").is_none()
+                    && l.arg(1) != "Air Balloon"
+            }
+            Some(f) => f == "gem" || f == "move: Fling",
+        };
+        if let Some(m) = self.mon_mut(who) {
+            if eaten && berry {
+                m.ate_berry = true;
+            }
+            if id.is_some() && ((eaten && !again) || used) {
+                m.last_item = id;
+            }
+        }
+        // Bug Bite, Pluck: the user ate the berry.
+        if l.tag("from") == Some("stealeat") && berry {
+            if let Some(m) = l.tag("of").and_then(|of| self.mon_mut(of)) {
+                m.ate_berry = true;
+            }
+        }
         if l.tag("eat").is_some() && berry && !again {
             if let Some(m) = self.mon_mut(who) {
                 m.cud_chew = true;
@@ -2280,6 +2759,35 @@ impl Tracker {
         let effect = l.arg(1);
         if l.kind == "-fail" {
             self.on_fail(l);
+        }
+        // What stopped a move without failing it (Showdown's NOT_FAIL hit
+        // result): protection. An immunity fails it (a type's, Levitate's,
+        // and an ability's TryHit null: Soundproof, Good as Gold), and so
+        // does Psychic Terrain against a priority move; not a move on the
+        // whole field or a side (Perish Song), whose hit is the field's.
+        if let Some((user, id)) = self.act.as_ref().map(|a| (a.user.clone(), a.id)) {
+            if user != who {
+                let blocked = l.kind == "-activate"
+                    && matches!(
+                        effect,
+                        "move: Protect" | "move: Quick Guard" | "move: Wide Guard"
+                    );
+                if blocked {
+                    self.act_result(&user, None);
+                }
+                if l.kind == "-activate" && effect == "move: Psychic Terrain" {
+                    self.act_result(&user, Some(false));
+                }
+                let field = id.is_some_and(|i| {
+                    matches!(
+                        self.dex.mv(i).target,
+                        Target::All | Target::FoeSide | Target::AllySide | Target::AllyTeam
+                    )
+                });
+                if l.kind == "-immune" && !field {
+                    self.act_result(&user, Some(false));
+                }
+            }
         }
         // Confusion shows before the confused Pokémon's move, whether it
         // then moves or hurts itself: its action has begun.
@@ -2377,6 +2885,10 @@ impl Tracker {
         if l.kind == "-activate" && (effect == "move: Feint" || l.tag("broken").is_some()) {
             if let Some((s, _, _)) = parse_ref(&who) {
                 self.sides[s].conditions.retain(|(c, _)| !c.is_guard());
+            }
+            // and the target's stall counter.
+            if let Some(m) = self.mon_mut(&who) {
+                m.stall = None;
             }
         }
         // "-activate|HOLDER|ability: Forewarn|MOVE|[of] FOE": one of the foe's moves.
@@ -2862,7 +3374,7 @@ impl Tracker {
         let dex = &self.dex;
         let mon = |si: usize, k: usize, m: &MonView| {
             let (trapped, shed) = self.trap_state(si, k);
-            serde_json::json!({
+            let mut v = serde_json::json!({
                 "name": m.name,
                 "species": m.species.map(|s| dex.species(s).id.clone()),
                 "preview": m.preview,
@@ -2903,7 +3415,31 @@ impl Tracker {
                 "cudChew": m.cud_chew,
                 "illusionBroken": m.illusion_broken,
                 "shownAs": m.shown_as,
-            })
+            });
+            let attacked: Vec<Value> = m
+                .attacked_by
+                .iter()
+                .map(|a| {
+                    serde_json::json!({
+                        "side": a.side, "name": a.name, "slot": a.slot, "move": dex.mv(a.mv).id,
+                        "damage": a.damage, "thisTurn": a.this_turn,
+                    })
+                })
+                .collect();
+            let history = serde_json::json!({
+                "lastMoveTargetLoc": m.last_move_target_loc,
+                "moveThisTurnResult": m.move_this_turn,
+                "moveLastTurnResult": m.move_last_turn,
+                "timesAttacked": m.times_attacked,
+                "attackedBy": attacked,
+                "stall": m.stall,
+                "lastItem": m.last_item.map(|i| dex.item(i).id.clone()),
+                "ateBerry": m.ate_berry,
+            });
+            if let (Value::Object(o), Value::Object(h)) = (&mut v, history) {
+                o.extend(h);
+            }
+            v
         };
         let side = |si: usize, s: &SideView| {
             serde_json::json!({
@@ -2934,6 +3470,7 @@ impl Tracker {
             "ended": self.ended,
             "winner": self.winner,
             "openSheets": self.open_sheets,
+            "lastMove": self.last_move.map(|x| dex.mv(x).id.clone()),
             "field": {
                 "weather": self.field.weather.map(|(w, t)| serde_json::json!([w.id(), t])),
                 "terrain": self.field.terrain.map(|(x, t)| serde_json::json!([x.id(), t])),

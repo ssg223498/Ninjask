@@ -38,6 +38,17 @@ fingerprint moved from `fb8b1d107db9f213` to `468d11e0d5f4cf86`. With
   projection, with the calculations of `damage_party` / `order_party`
   (each pair's view made once and reused). `Dex.eval_move_marks(move_id)`
   gives what they read of a move: `(setup, heal, priority)`.
+- Worlds keep the move history (branch `singles-bss-eval`): the tracker
+  reads from the log, and `Tracker.world` builds, the field's last move
+  (`battle.lastMove`, Copycat), and per Pokémon `lastMoveTargetLoc` (kept
+  off the field), this and last turn's move result (`moveThisTurnResult`,
+  `moveLastTurnResult`: Stomping Tantrum), `timesAttacked` (Rage Fist),
+  `attackedBy` (Revenge, Avalanche; a foe's damage as its HP share), the
+  Protect `stall` counter, `lastItem` (Recycle, Harvest) and `ateBerry`
+  (Belch). The view (`Tracker.view()`) shows them. The singles world check
+  of battle-ai (`scripts/check_worlds.py`, reference games) finds them equal
+  to the true battle's for one's own side. In doubles the target location
+  of a move chosen without a target is a guess (the foe the line names).
 
 ### Fixed
 

@@ -694,3 +694,108 @@ def test_eval_move_marks(d):
         assert d.eval_move_marks("milkdrink")[1] is False
     with pytest.raises(ValueError):
         d.eval_move_marks("notamove")
+
+
+# The move history a world rebuilds from one side's log and requests: the
+# field's last move (Copycat), and for that side's Pokémon the last target
+# location, this and last turn's move result (Stomping Tantrum), the hits
+# taken (Rage Fist, Revenge), the stall counter (Protect), the item used up
+# (Recycle) and a berry eaten (Belch).
+HISTORY = ("lastMoveTargetLoc", "moveThisTurnResult", "moveLastTurnResult", "timesAttacked", "attackedBy",
+           "lastItem", "ateBerry")
+
+
+def _history(p, side):
+    s = next(x for x in p["sides"] if x["id"] == side)
+    return {
+        "lastMove": p["lastMove"],
+        **{
+            m["name"]: {**{k: m[k] for k in HISTORY}, "stall": m["volatiles"].get("stall")}
+            for m in s["pokemon"] if not m["fainted"]
+        },
+    }
+
+
+def test_world_rebuilds_the_move_history(d):
+    from ninjask.world_check import true_assumptions
+
+    t = _teams()
+    checked, seen, bad = 0, set(), []
+    for g in range(16):
+        b = ninjask.Battle(d, t[g % len(t)], t[(g + 5) % len(t)], seed=g)
+        b.set_logging(True)
+        tracker, read = ninjask.Tracker(d, "p1"), 0
+        rng = random.Random(g)
+        while not b.ended and b.turn < 40:
+            for side in ("p1", "p2"):
+                if not b.needs_choice(side):
+                    continue
+                if side == "p1":
+                    lines = b.log("p1", read)
+                    read += len(lines)
+                    tracker.feed(lines)
+                    tracker.feed_request(b.request("p1"))
+                    truth = json.loads(b.projection())
+                    if b.turn > 0:
+                        world = json.loads(tracker.world(true_assumptions(json.loads(tracker.view()), truth), 0)
+                                           .projection())
+                        want, got = _history(truth, "p1"), _history(world, "p1")
+                        if want != got:
+                            bad.append((g, b.turn, want, got))
+                        checked += 1
+                        seen |= {k for m in want.values() if isinstance(m, dict) for k, v in m.items()
+                                 if v not in (None, 0, [], False)}
+                choices = b.legal_choices(side)
+                try:
+                    b.choose_index(side, rng.randrange(len(choices)))
+                except ValueError:  # a move the request hides as disabled: the request now says so
+                    pass
+    assert checked > 200
+    assert not bad, bad[:3]
+    # Every item took a value other than its default somewhere.
+    assert seen >= {"lastMoveTargetLoc", "moveLastTurnResult", "timesAttacked", "attackedBy", "stall"}, seen
+
+
+def test_tracker_reads_protect_and_hits(d):
+    t = ninjask.Tracker(d, "p1")
+    t.feed([
+        "|gametype|singles",
+        "|switch|p1a: Garchomp|Garchomp, L50, M|183/183",
+        "|switch|p2a: Kangaskhan|Kangaskhan, L50, F|100/100",
+        "|turn|1",
+        "|move|p1a: Garchomp|Protect|p1a: Garchomp",
+        "|-singleturn|p1a: Garchomp|Protect",
+        "|move|p2a: Kangaskhan|Body Slam|p1a: Garchomp",
+        "|-activate|p1a: Garchomp|move: Protect",
+        "|",
+        "|upkeep",
+        "|turn|2",
+        "|move|p1a: Garchomp|Protect|p1a: Garchomp",
+        "|-singleturn|p1a: Garchomp|Protect",
+        "|move|p2a: Kangaskhan|Double-Edge|p1a: Garchomp",
+        "|-activate|p1a: Garchomp|move: Protect",
+        "|",
+        "|upkeep",
+        "|turn|3",
+    ])
+    g = json.loads(t.view())["sides"][0]["pokemon"][0]
+    assert g["stall"] == [9, 1] and g["moveLastTurnResult"] is True
+    assert json.loads(t.view())["lastMove"] == "doubleedge"
+    t.feed([
+        "|move|p2a: Kangaskhan|Double-Edge|p1a: Garchomp",
+        "|-damage|p1a: Garchomp|120/183",
+        "|-damage|p1a: Garchomp|100/183",
+        "|-hitcount|p1a: Garchomp|2",
+        "|move|p1a: Garchomp|Protect|p1a: Garchomp",
+        "|-fail|p1a: Garchomp",
+        "|",
+        "|upkeep",
+        "|turn|4",
+    ])
+    g = json.loads(t.view())["sides"][0]["pokemon"][0]
+    # Protect used last fails without ending the counter (no roll); it ran out at the residual.
+    assert g["stall"] is None and g["moveLastTurnResult"] is False
+    assert g["timesAttacked"] == 2
+    assert g["attackedBy"] == [{"side": 1, "name": "Kangaskhan", "slot": 0, "move": "doubleedge", "damage": 20,
+                                "thisTurn": False}]
+    assert g["lastMoveTargetLoc"] == -1
