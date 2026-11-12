@@ -23,6 +23,14 @@ fingerprint moved from `fb8b1d107db9f213` to `468d11e0d5f4cf86`. With
   Pokémon leads, so each brought one can (the doubles reading, two leads,
   never lets the third one lead). `RandomPolicy` passes its game type.
 - `tests/python/test_singles.py`.
+- `Battle.damage_party` and `Battle.order_party` (Rust:
+  `Battle::damage_calc_party`, `order_odds_party`, `with_in_slot`; branch
+  `singles-bss-eval`): `damage` and `order` for any Pokémon of a party,
+  named "p1:2" (the side and the index into the projection's
+  `sides[i]["pokemon"]`). A benched Pokémon counts as if it were in its
+  side's first slot, switched in with nothing happening on the way in: the
+  battle's field, weather and side conditions, no boosts. Pointing at
+  Pokémon on the field gives exactly `damage` and `order`.
 
 ### Fixed
 

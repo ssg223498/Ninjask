@@ -186,3 +186,103 @@ fn grouped_calculations_match_single_ones() {
     }
     assert!(compared > 1000, "only {compared} calculations compared");
 }
+
+/// Damage and turn order for any Pokémon of a party (`damage_calc_party`,
+/// `order_odds_party`): a benched one counts as if it were in its side's
+/// slot. In singles (`gen9championsbssregmc`): pointing at the Pokémon on
+/// the field gives exactly `damage_calc` and `order_odds`, a benched one's
+/// calculation targets its own HP, and the battle is left as it was.
+#[test]
+fn party_calculations_place_benched_pokemon_in_the_slot() {
+    let Some(json) = common::format_export("gen9championsbssregmc") else {
+        return;
+    };
+    let root = env!("CARGO_MANIFEST_DIR");
+    let dex = Arc::new(Dex::from_json(&json).unwrap());
+    let teams: Vec<Vec<ninjask::dex::team::MonSet>> =
+        std::fs::read_to_string(format!("{root}/tests/fixtures/regmc_teams.txt"))
+            .unwrap()
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| parse_packed(&dex, l).unwrap())
+            .collect();
+    let mut rng = Rng::new(9);
+    let (mut same, mut bench) = (0usize, 0usize);
+    for g in 0..16 {
+        let mut b = Battle::from_sets(
+            dex.clone(),
+            [&teams[g % teams.len()], &teams[(g * 3 + 1) % teams.len()]],
+            ["a", "b"],
+            200 + g as u64,
+        );
+        b.log_enabled = false;
+        b.choose_team(0, vec![0, 1, 2]);
+        b.choose_team(1, vec![2, 0, 1]);
+        for _ in 0..(g % 4) {
+            for s in 0..2 {
+                if b.request != RequestState::Ended && b.side_needs_choice(s) {
+                    let c = b.sample_joint_choice(s, &mut rng);
+                    b.choose_structured(s, c);
+                }
+            }
+        }
+        if b.ended || b.request != RequestState::Move {
+            continue;
+        }
+        let before = b.projection();
+        let (a, o) = (b.active(0, 0).unwrap(), b.active(1, 0).unwrap());
+        for slot in 0..b.mon(a).moves.len() {
+            let id = b.mon(a).moves[slot].id;
+            assert_eq!(
+                b.damage_calc_party(a, id, o).unwrap(),
+                b.damage_calc(a, id, o)
+            );
+            let p = Plan::Move(id);
+            assert_eq!(
+                b.order_odds_party(a, p, o, Plan::Priority(0)).unwrap(),
+                b.order_odds(a, p, o, Plan::Priority(0))
+            );
+            same += 1;
+        }
+        for x in 0..b.sides[0].mons.len() {
+            for y in 0..b.sides[1].mons.len() {
+                let (x, y) = ((0, x), (1, y));
+                if b.mon(x).fainted || b.mon(y).fainted {
+                    continue;
+                }
+                let (view, refs) = b.with_in_slot(&[x, y]).unwrap();
+                // Placed in the slot, with the Pokémon it displaced on the bench.
+                assert_eq!(refs, vec![(0, 0), (1, 0)]);
+                assert_eq!(view.mon(refs[0]).name, b.mon(x).name);
+                assert_eq!(view.mon(refs[1]).name, b.mon(y).name);
+                assert!(view.mon(refs[0]).is_active && view.mon(refs[1]).is_active);
+                assert_eq!(view.all_active().len(), 2);
+                for slot in 0..b.mon(x).moves.len() {
+                    let id = b.mon(x).moves[slot].id;
+                    let c = b.damage_calc_party(x, id, y).unwrap();
+                    assert_eq!(c.target_maxhp, b.mon(y).maxhp as u32);
+                    assert_eq!(c.target_hp, b.mon(y).hp as u32);
+                    assert_eq!(c, view.damage_calc(refs[0], id, refs[1]));
+                    bench += 1;
+                }
+                let o = b
+                    .order_odds_party(x, Plan::Switch, y, Plan::Priority(0))
+                    .unwrap();
+                assert_eq!(o.first, 1.0);
+            }
+        }
+        assert_eq!(
+            before,
+            b.projection(),
+            "a party calculation changed the battle"
+        );
+        // Out of range, and two Pokémon of one side in its one slot.
+        let n = b.sides[0].mons.len();
+        assert!(b.with_in_slot(&[(0, n)]).is_err());
+        assert!(b.with_in_slot(&[(2, 0)]).is_err());
+        assert!(b.with_in_slot(&[(0, 1), (0, 2)]).is_err());
+        assert!(b.with_in_slot(&[(0, 0), (0, 2)]).is_err());
+        assert!(b.with_in_slot(&[(0, 2), (0, 2)]).is_ok());
+    }
+    assert!(same >= 20 && bench >= 200, "{same} {bench}");
+}

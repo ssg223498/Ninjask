@@ -123,6 +123,11 @@ class Battle:
         """The damage calculation for a move from slot `attacker` against slot `target`, as JSON."""
     def order(self, a: str, plan_a: str, b: str, plan_b: str) -> tuple[float, float]:
         """`(first, tie)`: the chance that slot `a` acts before slot `b`, and that a speed tie decides it."""
+    def damage_party(self, attacker: str, move_id: str, target: str) -> str:
+        """`damage` for any Pokémon of a party, named "p1:2" (side and index into the projection's
+        `sides[i]["pokemon"]`); a benched one counts as in its side's slot, with no boosts."""
+    def order_party(self, a: str, plan_a: str, b: str, plan_b: str) -> tuple[float, float]:
+        """`order` for any Pokémon of a party, named as in `damage_party`."""
     def speeds(self) -> str:
         """Each active Pokémon's effective Speed, `{"p1a": speed, ...}`, as JSON."""
     @property

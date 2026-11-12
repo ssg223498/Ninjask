@@ -234,3 +234,150 @@ def test_refused_choices_update_requests_like_showdown(case):
                     assert got == want, (choice, s)
         sd.close()
     assert refused >= 2
+
+
+# Damage and turn order for any Pokémon of a party ("p1:2": side and index
+# into the projection's `sides[i]["pokemon"]`), benched ones included.
+
+
+def _positions(d, seeds=range(12), turns=4):
+    """Singles positions after team preview and a few random turns, each
+    with both slots filled and moves to choose."""
+    t = _teams()
+    out = []
+    for g in seeds:
+        b = ninjask.Battle(d, t[g % len(t)], t[(g + 3) % len(t)], seed=g)
+        b.set_logging(False)
+        b.choose("p1", "team 123")
+        b.choose("p2", "team 231")
+        rng = random.Random(g)
+        for _ in range(rng.randrange(turns + 1)):
+            if b.ended:
+                break
+            for side in ("p1", "p2"):
+                if b.needs_choice(side):
+                    choices = b.legal_choices(side)
+                    b.choose_index(side, rng.randrange(len(choices)))
+        if b.ended or not (b.needs_choice("p1") and b.needs_choice("p2")):
+            continue
+        p = json.loads(b.projection())
+        if any(json.loads(b.request(s)).get("forceSwitch") for s in ("p1", "p2")):
+            continue
+        out.append((b, p))
+    assert len(out) >= 6
+    return out
+
+
+def _active_index(side):
+    return next(i for i, m in enumerate(side["pokemon"]) if m["isActive"] and not m["fainted"])
+
+
+def test_damage_party_matches_active(d):
+    """Pointing at the Pokémon on the field gives exactly `damage` and `order`."""
+    compared = 0
+    for b, p in _positions(d):
+        k, j = _active_index(p["sides"][0]), _active_index(p["sides"][1])
+        a_moves = [m["id"] for m in p["sides"][0]["pokemon"][k]["moves"]]
+        b_moves = [m["id"] for m in p["sides"][1]["pokemon"][j]["moves"]]
+        for mv in a_moves:
+            assert b.damage_party(f"p1:{k}", mv, f"p2:{j}") == b.damage("p1a", mv, "p2a")
+            compared += 1
+        for mv in b_moves:
+            assert b.damage_party(f"p2:{j}", mv, f"p1:{k}") == b.damage("p2a", mv, "p1a")
+        for pa in a_moves + ["switch", "priority:1"]:
+            for pb in b_moves + ["priority:0"]:
+                assert b.order_party(f"p1:{k}", pa, f"p2:{j}", pb) == b.order("p1a", pa, "p2a", pb)
+                assert b.order_party(f"p2:{j}", pb, f"p1:{k}", pa) == b.order("p2a", pb, "p1a", pa)
+    assert compared >= 20
+
+
+def test_damage_party_bench(d):
+    """A benched Pokémon counts as if it were in its side's slot, with its
+    own stats and no boosts; the battle is left as it was."""
+    seen = 0
+    for b, p in _positions(d):
+        before = b.projection()
+        sides = p["sides"]
+        for s, foe in ((0, 1), (1, 0)):
+            for x, mon in enumerate(sides[s]["pokemon"]):
+                for y, target in enumerate(sides[foe]["pokemon"]):
+                    if mon["fainted"] or target["fainted"]:
+                        continue
+                    for mv in mon["moves"]:
+                        c = json.loads(b.damage_party(f"p{s + 1}:{x}", mv["id"], f"p{foe + 1}:{y}"))
+                        assert c["targetMaxhp"] == target["maxhp"] and c["targetHp"] == target["hp"]
+                        assert 0.0 <= c["ko"] <= c["ko2"] + 1e-12 <= 1.0 + 1e-9
+                        if not mon["isActive"] or not target["isActive"]:
+                            seen += 1
+                    first, tie = b.order_party(f"p{s + 1}:{x}", mon["moves"][0]["id"], f"p{foe + 1}:{y}", "priority:0")
+                    assert 0.0 <= first <= 1.0 and 0.0 <= tie <= 1.0
+                    first, _ = b.order_party(f"p{s + 1}:{x}", "switch", f"p{foe + 1}:{y}", "priority:0")
+                    assert first == 1.0
+        assert b.projection() == before, "damage_party changed the battle"
+    assert seen >= 100
+
+
+def test_damage_party_bench_ignores_the_active_pokemons_boosts(d):
+    """The active Pokémon's boosts stay with it: raising them changes its own
+    damage and order, never a benched Pokémon's, which counts with none. The
+    foe on the field keeps its boosts."""
+    changed = 0
+    for b, p in _positions(d):
+        own = p["sides"][0]["pokemon"]
+        k, j = _active_index(p["sides"][0]), _active_index(p["sides"][1])
+        bench = [i for i, m in enumerate(own) if not m["isActive"] and not m["fainted"]]
+        foe_only = json.loads(b.projection())
+        foe_only["sides"][1]["pokemon"][j]["boosts"].update({"def": -6, "spd": -6})
+        both = json.loads(json.dumps(foe_only))
+        both["sides"][0]["pokemon"][k]["boosts"].update({"atk": 6, "spa": 6, "spe": 6})
+        foe_only = ninjask.Battle.from_projection(d, json.dumps(foe_only), 0)
+        both = ninjask.Battle.from_projection(d, json.dumps(both), 0)
+        for i in bench:
+            for mv in own[i]["moves"]:
+                x, y = f"p1:{i}", f"p2:{j}"
+                assert both.damage_party(x, mv["id"], y) == foe_only.damage_party(x, mv["id"], y)
+                assert both.order_party(x, mv["id"], y, "priority:0") == foe_only.order_party(x, mv["id"], y, "priority:0")
+        for mv in own[k]["moves"]:
+            x, y = f"p1:{k}", f"p2:{j}"
+            if both.damage_party(x, mv["id"], y) != foe_only.damage_party(x, mv["id"], y):
+                changed += 1
+    assert changed >= 5
+
+
+def test_damage_party_refuses_bad_references(d):
+    b, p = _positions(d)[0]
+    mv = p["sides"][0]["pokemon"][0]["moves"][0]["id"]
+    n = len(p["sides"][0]["pokemon"])
+    for bad in (f"p1:{n}", "p3:0", "p1a", "p1:", "p1:x", ""):
+        with pytest.raises(ValueError):
+            b.damage_party(bad, mv, "p2:0")
+        with pytest.raises(ValueError):
+            b.order_party(bad, "priority:0", "p2:0", "priority:0")
+    bench = [i for i, m in enumerate(p["sides"][0]["pokemon"]) if not m["isActive"]]
+    # Two different Pokémon of one side can't both be in its one slot.
+    with pytest.raises(ValueError):
+        b.damage_party(f"p1:{bench[0]}", mv, f"p1:{bench[1]}")
+
+
+def test_damage_party_bench_matches_the_position_with_it_switched_in(d):
+    """A benched Pokémon counts as it would in the position where it had
+    switched in with nothing happening on the way in: the projection with
+    it and the active Pokémon swapped (Showdown's `switchIn` order)."""
+    compared = 0
+    for b, p in _positions(d, seeds=range(20)):
+        for k, mon in enumerate(p["sides"][0]["pokemon"]):
+            if mon["isActive"] or mon["fainted"]:
+                continue
+            q = json.loads(b.projection())
+            mons = q["sides"][0]["pokemon"]
+            mons[0], mons[k] = mons[k], mons[0]
+            mons[0]["position"], mons[k]["position"] = 0, k
+            mons[0]["isActive"], mons[k]["isActive"] = True, False
+            q["sides"][0]["active"] = [mons[0]["name"]]
+            w = ninjask.Battle.from_projection(d, json.dumps(q), 0)
+            for mv in mon["moves"]:
+                assert b.damage_party(f"p1:{k}", mv["id"], "p2:0") == w.damage("p1a", mv["id"], "p2a")
+                assert b.damage_party("p2:0", mv["id"], f"p1:{k}") == w.damage("p2a", mv["id"], "p1a")
+                assert b.order_party(f"p1:{k}", mv["id"], "p2:0", "priority:0") == w.order("p1a", mv["id"], "p2a", "priority:0")
+                compared += 1
+    assert compared >= 50

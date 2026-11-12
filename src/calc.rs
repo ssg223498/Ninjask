@@ -187,6 +187,97 @@ impl Battle {
         copy.calc(attacker, move_id, target)
     }
 
+    /// A copy of the battle in which each of `refs` that is not in one of
+    /// its side's active slots (a benched Pokémon) is in the side's first
+    /// slot, as if it had switched in with nothing happening on the way in
+    /// (no entry hazards or switch-in abilities): the Pokémon it displaces
+    /// goes to its place on the bench, with what refers to either following
+    /// them (Showdown `switchIn` swaps the two in `side.pokemon`), and it
+    /// counts with no boosts. The field, the weather and the side
+    /// conditions are the battle's own. Returns the copy and where each of
+    /// `refs` is in it. A side can have only one Pokémon of `refs` there
+    /// when one of them is benched (they can't share the slot); an index
+    /// past the party is an error too.
+    pub fn with_in_slot(&self, refs: &[MonRef]) -> Result<(Battle, Vec<MonRef>), String> {
+        for &r in refs {
+            self.in_active_slot(r)?;
+        }
+        let mut view = self.clone();
+        view.damage_samples = None;
+        let mut out = refs.to_vec();
+        for s in 0..self.sides.len() {
+            let n_active = self.sides[s].n_active;
+            let Some(&(_, k)) = refs.iter().find(|&&(rs, i)| rs == s && i >= n_active) else {
+                continue;
+            };
+            if refs.iter().any(|&(rs, i)| rs == s && i != k) {
+                return Err(format!(
+                    "two Pokémon of side {s}, one of them benched: they can't share its slot"
+                ));
+            }
+            let flip = |i: usize| match i {
+                0 => k,
+                i if i == k => 0,
+                i => i,
+            };
+            view.swap_refs(s, flip);
+            let side = &mut view.sides[s];
+            side.mons.swap(0, k);
+            side.mons[0].position = 0;
+            side.mons[k].position = k;
+            side.mons[k].is_active = false;
+            let m = &mut side.mons[0];
+            m.is_active = true;
+            m.boosts = [0; 7];
+            for r in out.iter_mut().filter(|r| r.0 == s) {
+                r.1 = 0;
+            }
+        }
+        Ok((view, out))
+    }
+
+    /// [`Battle::damage_calc`] for any Pokémon of the two parties, benched
+    /// ones counting as in their side's slot ([`Battle::with_in_slot`]).
+    /// For two Pokémon in active slots, exactly `damage_calc`.
+    pub fn damage_calc_party(
+        &self,
+        attacker: MonRef,
+        move_id: MoveId,
+        target: MonRef,
+    ) -> Result<DamageCalc, String> {
+        if self.in_active_slot(attacker)? && self.in_active_slot(target)? {
+            return Ok(self.damage_calc(attacker, move_id, target));
+        }
+        let (mut view, r) = self.with_in_slot(&[attacker, target])?;
+        Ok(view.calc(r[0], move_id, r[1]))
+    }
+
+    /// [`Battle::order_odds`] for any Pokémon of the two parties, benched
+    /// ones counting as in their side's slot ([`Battle::with_in_slot`]).
+    /// For two Pokémon in active slots, exactly `order_odds`.
+    pub fn order_odds_party(
+        &self,
+        a: MonRef,
+        pa: Plan,
+        b: MonRef,
+        pb: Plan,
+    ) -> Result<OrderOdds, String> {
+        if self.in_active_slot(a)? && self.in_active_slot(b)? {
+            return Ok(self.order_odds(a, pa, b, pb));
+        }
+        let (view, r) = self.with_in_slot(&[a, b])?;
+        Ok(view.order_odds(r[0], pa, r[1], pb))
+    }
+
+    /// Whether `r` is in one of its side's active slots (the Pokémon there
+    /// may have fainted); an error when there is no such Pokémon.
+    fn in_active_slot(&self, (s, i): MonRef) -> Result<bool, String> {
+        if s >= self.sides.len() || i >= self.sides[s].mons.len() {
+            return Err(format!("no Pokémon {i} on side {s}"));
+        }
+        Ok(i < self.sides[s].n_active)
+    }
+
     /// Enter probe mode and save what a calculation touches.
     fn calc_begin(&mut self, r: MonRef) -> CalcSave {
         let save = CalcSave {

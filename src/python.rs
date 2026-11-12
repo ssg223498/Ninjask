@@ -482,24 +482,36 @@ impl PyBattle {
     /// expected damage, and the chances to KO this turn and within two uses.
     fn damage(&self, attacker: &str, move_id: &str, target: &str) -> PyResult<String> {
         let (a, t) = (self.slot_ref(attacker)?, self.slot_ref(target)?);
-        let id = self
+        let id = self.move_id(move_id)?;
+        Ok(damage_json(&self.inner.damage_calc(a, id, t)))
+    }
+
+    /// `damage` for any Pokémon of the two parties, named by side and index
+    /// into the projection's `sides[i]["pokemon"]` ("p1:2"). A benched
+    /// Pokémon counts as if it were in its side's slot, with the battle's
+    /// field, weather and side conditions and no boosts (only Pokémon on
+    /// the field have them); see `Battle::with_in_slot`. For two Pokémon
+    /// on the field, exactly `damage`. ValueError for two Pokémon of one
+    /// side when one of them is benched.
+    fn damage_party(&self, attacker: &str, move_id: &str, target: &str) -> PyResult<String> {
+        let (a, t) = (party_ref(attacker)?, party_ref(target)?);
+        let id = self.move_id(move_id)?;
+        let c = self
             .inner
-            .dex
-            .move_id(move_id)
-            .ok_or_else(|| PyValueError::new_err(format!("unknown move {move_id}")))?;
-        let c = self.inner.damage_calc(a, id, t);
-        let hits: Vec<serde_json::Value> = c
-            .hits
-            .iter()
-            .map(|h| serde_json::json!({"normal": h.normal, "crit": h.crit}))
-            .collect();
-        Ok(serde_json::json!({
-            "damaging": c.damaging, "immune": c.immune, "accuracy": c.accuracy,
-            "critChance": c.crit_chance, "spread": c.spread, "hitCounts": c.hit_counts,
-            "hits": hits, "fixed": c.fixed, "targetHp": c.target_hp, "targetMaxhp": c.target_maxhp,
-            "expected": c.expected, "ko": c.ko, "ko2": c.ko2,
-        })
-        .to_string())
+            .damage_calc_party(a, id, t)
+            .map_err(PyValueError::new_err)?;
+        Ok(damage_json(&c))
+    }
+
+    /// `order` for any Pokémon of the two parties, named as in
+    /// `damage_party` ("p1:2"), benched ones counting as in their side's slot.
+    fn order_party(&self, a: &str, plan_a: &str, b: &str, plan_b: &str) -> PyResult<(f64, f64)> {
+        let (ra, rb) = (party_ref(a)?, party_ref(b)?);
+        let o = self
+            .inner
+            .order_odds_party(ra, self.plan(plan_a)?, rb, self.plan(plan_b)?)
+            .map_err(PyValueError::new_err)?;
+        Ok((o.first, o.tie))
     }
 
     /// The chance that the Pokémon in slot `a` doing `plan_a` acts before
@@ -564,6 +576,13 @@ impl PyBattle {
             .ok_or_else(|| PyValueError::new_err(format!("no Pokémon in {slot}")))
     }
 
+    fn move_id(&self, move_id: &str) -> PyResult<crate::dex::types::MoveId> {
+        self.inner
+            .dex
+            .move_id(move_id)
+            .ok_or_else(|| PyValueError::new_err(format!("unknown move {move_id}")))
+    }
+
     fn plan(&self, plan: &str) -> PyResult<crate::calc::Plan> {
         if plan == "switch" {
             return Ok(crate::calc::Plan::Switch);
@@ -580,6 +599,33 @@ impl PyBattle {
             .map(crate::calc::Plan::Move)
             .ok_or_else(|| PyValueError::new_err(format!("unknown move {plan}")))
     }
+}
+
+/// A Pokémon of a party named like "p1:2": the side and its index into
+/// the projection's `sides[i]["pokemon"]` (the engine's party order). The
+/// index is checked against the party by the calculation.
+fn party_ref(name: &str) -> PyResult<crate::battle::MonRef> {
+    let bad = || PyValueError::new_err(format!("bad Pokémon {name:?} (want \"p1:2\")"));
+    let (side, index) = name.split_once(':').ok_or_else(bad)?;
+    let s = side_index(side).map_err(|_| bad())?;
+    let i: usize = index.parse().map_err(|_| bad())?;
+    Ok((s, i))
+}
+
+/// A damage calculation as the JSON `damage` and `damage_party` return.
+fn damage_json(c: &crate::calc::DamageCalc) -> String {
+    let hits: Vec<serde_json::Value> = c
+        .hits
+        .iter()
+        .map(|h| serde_json::json!({"normal": h.normal, "crit": h.crit}))
+        .collect();
+    serde_json::json!({
+        "damaging": c.damaging, "immune": c.immune, "accuracy": c.accuracy,
+        "critChance": c.crit_chance, "spread": c.spread, "hitCounts": c.hit_counts,
+        "hits": hits, "fixed": c.fixed, "targetHp": c.target_hp, "targetMaxhp": c.target_maxhp,
+        "expected": c.expected, "ko": c.ko, "ko2": c.ko2,
+    })
+    .to_string()
 }
 
 fn slot_name(r: crate::battle::MonRef) -> String {
